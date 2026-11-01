@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- The capture and restore engine against fake Steam folders in temp, and the archives it writes. Nothing here
+         reads or writes this machine's own Steam, registry, display or driver settings: every restore names a temp
+         Steam folder and only the file sections. -->
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="TUnit"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\src\CS2OpenDev.ConfigManager.Core\CS2OpenDev.ConfigManager.Core.csproj"/>
+    </ItemGroup>
+
+</Project>
