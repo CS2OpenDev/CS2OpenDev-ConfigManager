@@ -1,0 +1,10 @@
+# Line endings are part of the content here, not a checkout preference: the archive tests compare text
+# built in memory with LF against the files, and the kit's source is hashed into every v1 backup.
+* text=auto eol=lf
+
+# cmd.exe misreads a batch file with LF endings (labels and multi-line blocks break), so these stay CRLF
+# in the repository and in every checkout.
+*.cmd text eol=crlf
+
+*.png binary
+*.zip binary

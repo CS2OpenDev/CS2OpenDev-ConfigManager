@@ -1,0 +1,51 @@
+<Project>
+    <!-- See https://aka.ms/dotnet/msbuild/customize for more details on customizing your build -->
+    <ItemGroup>
+        <PackageReference Include="Nerdbank.GitVersioning" PrivateAssets="all"/>
+    </ItemGroup>
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <LangVersion>latest</LangVersion>
+
+        <ArtifactsPath>$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
+        <EnableNETAnalyzers>true</EnableNETAnalyzers>
+        <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+        <CodeAnalysisTreatWarningsAsErrors>true</CodeAnalysisTreatWarningsAsErrors>
+        <AnalysisMode>Recommended</AnalysisMode>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <NoWarn>CS1591</NoWarn>
+
+        <!-- Restore-time version problems fail the build. The plugin must run against exactly the
+             DemoViewer.NET host assemblies it was built for (the host refuses a reference skew), so a
+             silently unified version is a load failure later, not a warning now. -->
+        <WarningsAsErrors>$(WarningsAsErrors);NU1608;NU1605</WarningsAsErrors>
+
+        <!-- Nothing here is published to NuGet unless it opts in. -->
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+
+    <!-- Test projects: method names carry underscores by convention (Method_Condition_Expected), and every
+         test assembly gets the shared category names as linked source. -->
+    <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('.Tests'))">
+        <NoWarn>$(NoWarn);CA1707</NoWarn>
+    </PropertyGroup>
+    <ItemGroup Condition="$(MSBuildProjectName.EndsWith('.Tests'))">
+        <Compile Include="$(MSBuildThisFileDirectory)test/Shared/*.cs" LinkBase="Shared"/>
+        <!-- Where the sources are, for tests that check them: the build output can live outside the
+             repository (-p:ArtifactsPath), so walking up from the test binary is not enough. -->
+        <AssemblyMetadata Include="RepositoryRoot" Value="$(MSBuildThisFileDirectory)"/>
+    </ItemGroup>
+
+    <!--
+        Release builds normalize first-party source paths to /_/ rather than recording the build
+        machine's absolute paths in each assembly's CodeView debug directory. Debug builds keep real
+        paths, which a local debugger needs to find the sources.
+    -->
+    <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+        <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    </PropertyGroup>
+</Project>

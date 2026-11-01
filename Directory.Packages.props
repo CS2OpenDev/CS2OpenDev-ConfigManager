@@ -1,0 +1,27 @@
+<Project>
+    <!-- https://learn.microsoft.com/en-us/nuget/consume-packages/central-package-management -->
+    <PropertyGroup>
+        <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <!-- Versioning. Injected into every project by Directory.Build.props. -->
+        <PackageVersion Include="Nerdbank.GitVersioning" Version="3.7.115"/>
+
+        <!--
+            The DemoViewer.NET plugin. These must equal what the DemoViewer.NET release the plugin targets
+            ships: the host compares every assembly a plugin references against its own and refuses a
+            difference. SDK 2.1.1 pins Avalonia 12.1.4, CommunityToolkit.Mvvm 8.4.2 and
+            Microsoft.Extensions.* 10.0.13; move them together with the SDK.
+        -->
+        <PackageVersion Include="DemoViewer.NET.Extensions.Sdk" Version="2.1.1"/>
+        <PackageVersion Include="DemoViewer.NET.Extensions.Sdk.Ui" Version="2.1.1"/>
+        <PackageVersion Include="Avalonia" Version="12.1.4"/>
+        <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2"/>
+        <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.13"/>
+        <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.13"/>
+
+        <!-- Tests. TUnit on Microsoft.Testing.Platform, like the rest of the CS2OpenDev family. -->
+        <PackageVersion Include="TUnit" Version="1.76.0"/>
+    </ItemGroup>
+</Project>
