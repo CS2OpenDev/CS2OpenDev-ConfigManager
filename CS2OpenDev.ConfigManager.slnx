@@ -7,4 +7,7 @@
         <File Path="version.json"/>
         <File Path=".editorconfig"/>
     </Folder>
+    <Folder Name="/src/">
+        <Project Path="src/CS2OpenDev.ConfigManager.Core/CS2OpenDev.ConfigManager.Core.csproj"/>
+    </Folder>
 </Solution>

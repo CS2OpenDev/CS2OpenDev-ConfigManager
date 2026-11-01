@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Capture, restore, rules and the archive format, with nothing from DemoViewer.NET or Avalonia. The
+         restorer and the DemoViewer.NET plugin share this one engine. The restorer ships Native AOT, so the
+         trim and AOT analyzers run here. -->
+    <PropertyGroup>
+        <RootNamespace>CS2OpenDev.ConfigManager</RootNamespace>
+        <IsAotCompatible>true</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="CS2OpenDev.ConfigManager.Core.Tests"/>
+        <InternalsVisibleTo Include="acb"/>
+        <InternalsVisibleTo Include="CS2OpenDev.ConfigManager.Cli.Tests"/>
+    </ItemGroup>
+
+</Project>
