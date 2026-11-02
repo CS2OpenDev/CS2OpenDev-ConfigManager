@@ -6,6 +6,7 @@
         <File Path="nuget.config"/>
         <File Path="version.json"/>
         <File Path=".editorconfig"/>
+        <File Path="README.md"/>
     </Folder>
     <Folder Name="/src/">
         <Project Path="src/CS2OpenDev.ConfigManager.Core/CS2OpenDev.ConfigManager.Core.csproj"/>
