@@ -1,0 +1,9 @@
+{
+  "id": "dev.cs2opendev.configmanager",
+  "name": "Advanced Config Backup",
+  "version": "{version}",
+  "assembly": "CS2OpenDev.ConfigManager.DemoViewer.dll",
+  "entryType": "CS2OpenDev.ConfigManager.DemoViewer.ConfigBackupPack",
+  "requiresHost": "^2.1",
+  "requiresCs2DemoKit": "*"
+}

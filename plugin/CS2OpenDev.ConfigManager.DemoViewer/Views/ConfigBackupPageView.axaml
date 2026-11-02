@@ -1,0 +1,74 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:CS2OpenDev.ConfigManager.DemoViewer.ViewModels"
+             x:Class="CS2OpenDev.ConfigManager.DemoViewer.Views.ConfigBackupPageView"
+             x:DataType="vm:ConfigBackupPageViewModel">
+
+    <StackPanel Spacing="12">
+        <TextBlock Foreground="{DynamicResource TextDim}" FontSize="11" TextWrapping="Wrap"
+                   Text="Save your CS2 settings, binds and cfg files, and the Windows and NVIDIA settings that matter to CS2, into one zip. On another PC (an internet cafe, a LAN, a tournament booth) sign in to Steam with your own account and start CS2 once, then restore the backup with acb, the Advanced Config Backup restorer; run acb undo before you leave to put that PC back." />
+
+        <Border Background="{DynamicResource PanelHeaderBg}" CornerRadius="4" Padding="8,6">
+            <TextBlock Foreground="{DynamicResource TextValue}" FontSize="11" TextWrapping="Wrap"
+                       Text="{Binding Detected}" />
+        </Border>
+
+        <StackPanel Spacing="4" IsVisible="{Binding HasSeveralAccounts}">
+            <TextBlock Foreground="{DynamicResource TextDim}" FontSize="11" Text="Steam account to save" />
+            <ComboBox ItemsSource="{Binding Accounts}" SelectedItem="{Binding SelectedAccount}" MinWidth="320" FontSize="11">
+                <ComboBox.ItemTemplate>
+                    <DataTemplate x:DataType="vm:AccountChoice">
+                        <TextBlock Text="{Binding Label}" />
+                    </DataTemplate>
+                </ComboBox.ItemTemplate>
+            </ComboBox>
+        </StackPanel>
+
+        <StackPanel Spacing="2">
+            <TextBlock Foreground="{DynamicResource TextDim}" FontSize="11" Text="What to save" />
+            <ItemsControl ItemsSource="{Binding Choices}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:SectionChoice">
+                        <CheckBox IsChecked="{Binding IsChecked}" FontSize="11">
+                            <TextBlock Text="{Binding Label}" Foreground="{DynamicResource TextValue}" />
+                        </CheckBox>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <CheckBox IsChecked="{Binding IncludeGameStateIntegration}" FontSize="11"
+                      ToolTip.Tip="gamestate_integration_*.cfg files point CS2 at programs on this PC (overlays, RGB lighting). They do nothing on a PC without those programs, and their auth tokens are carried as they are.">
+                <TextBlock Text="Include game state integration cfg files" Foreground="{DynamicResource TextValue}" />
+            </CheckBox>
+        </StackPanel>
+
+        <StackPanel Spacing="4">
+            <TextBlock Foreground="{DynamicResource TextDim}" FontSize="11" Text="Save the zip to" />
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBox Grid.Column="0" Text="{Binding OutputFolder}" FontSize="11" />
+                <Button Grid.Column="1" Content="Browse" Classes="ghost" Padding="10,4" Margin="8,0,0,0"
+                        Click="OnBrowse" />
+            </Grid>
+        </StackPanel>
+
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="Create backup" Classes="primary" Padding="10,4"
+                    Command="{Binding CreateBackupCommand}" />
+            <Button Content="Show in folder" Classes="ghost" Padding="10,4"
+                    Command="{Binding RevealArchiveCommand}" />
+            <Button Content="Check a backup" Classes="ghost" Padding="10,4" Click="OnCheck"
+                    ToolTip.Tip="Check that a backup zip is unchanged since it was made: every file against its manifest, nothing added or missing." />
+        </StackPanel>
+
+        <TextBlock Foreground="{DynamicResource TextValue}" FontSize="11" TextWrapping="Wrap" Text="{Binding Status}" />
+        <ItemsControl ItemsSource="{Binding Results}">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="x:String">
+                    <TextBlock Foreground="{DynamicResource TextDim}" FontSize="10" TextWrapping="Wrap" Text="{Binding}" />
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <TextBlock Foreground="{DynamicResource TextDim}" FontSize="10" TextWrapping="Wrap"
+                   Text="The zip holds only your settings, as text files anyone can open and read, and no program. The restorer refuses a backup changed in any way after it was made. Passwords and server tokens in cfg files, the binds CS2 saved and launch options are left out; the zip holds your Steam account number and your binds. NVIDIA settings need an administrator on the other PC; everything else applies without one." />
+    </StackPanel>
+</UserControl>

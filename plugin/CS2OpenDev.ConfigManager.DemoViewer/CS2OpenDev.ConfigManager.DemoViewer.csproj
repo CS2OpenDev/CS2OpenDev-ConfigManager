@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- The DemoViewer.NET plugin: a Settings page that makes backups with the Core engine. Built against the
+         published extension SDK, whose build targets stamp extension.json with this project's version and
+         copy it beside the DLL, where the host reads it. -->
+    <PropertyGroup>
+        <RootNamespace>CS2OpenDev.ConfigManager.DemoViewer</RootNamespace>
+        <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="DemoViewer.NET.Extensions.Sdk"/>
+        <PackageReference Include="DemoViewer.NET.Extensions.Sdk.Ui"/>
+        <PackageReference Include="Avalonia"/>
+        <PackageReference Include="CommunityToolkit.Mvvm"/>
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection"/>
+        <PackageReference Include="Microsoft.Extensions.Logging"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <Using Include="DemoViewer.NET.Extensions.Sdk"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="CS2OpenDev.ConfigManager.DemoViewer.Tests"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\src\CS2OpenDev.ConfigManager.Core\CS2OpenDev.ConfigManager.Core.csproj"/>
+    </ItemGroup>
+
+    <!-- The Avalonia XAML rewrite re-embeds the .pdb path after Roslyn, so Release ships no .pdb path at all. -->
+    <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+        <DebugType>none</DebugType>
+    </PropertyGroup>
+</Project>

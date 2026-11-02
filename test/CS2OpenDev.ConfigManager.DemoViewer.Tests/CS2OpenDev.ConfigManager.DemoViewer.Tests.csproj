@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- The DemoViewer.NET plugin's packaging: the manifest the host reads and what it says. -->
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="TUnit"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\plugin\CS2OpenDev.ConfigManager.DemoViewer\CS2OpenDev.ConfigManager.DemoViewer.csproj"/>
+    </ItemGroup>
+
+</Project>
