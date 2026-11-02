@@ -92,16 +92,36 @@ internal sealed class UndoStore
     public static string? MachineRoot() =>
         MachineParent() is { } parent ? Path.Combine(parent, "CS2OpenDev", "ConfigBackup", "undo") : null;
 
-    /// <summary>Creates the store when missing. The per-user store on Linux is private to the user (0700).</summary>
+    /// <summary>
+    ///     Creates the store when missing. On Linux the store is private to the user (made 0700) every time it is used,
+    ///     not only when made: whatever a folder left open lets the group or others do is taken away again, in the
+    ///     store and in the folders above it that are acb's by name, and the owner's own rights are left as they are.
+    ///     One another user owns cannot be changed, so it throws, and nothing is restored into a store someone else
+    ///     controls.
+    /// </summary>
     public void EnsureUserStore()
     {
         if (OperatingSystem.IsWindows())
         {
             Directory.CreateDirectory(Root);
+            return;
         }
-        else
+
+        const UnixFileMode Owner = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        Directory.CreateDirectory(Root, Owner);
+        CloseToOthers(Root);
+        for (DirectoryInfo? parent = Directory.GetParent(Root); parent is { Name: "configbackup" or "cs2opendev" }; parent = parent.Parent)
         {
-            Directory.CreateDirectory(Root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            CloseToOthers(parent.FullName);
+        }
+
+        static void CloseToOthers(string folder)
+        {
+            UnixFileMode mode = File.GetUnixFileMode(folder);
+            if ((mode & ~Owner) != 0)
+            {
+                File.SetUnixFileMode(folder, mode & Owner);
+            }
         }
     }
 

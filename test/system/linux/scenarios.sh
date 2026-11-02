@@ -89,7 +89,16 @@ expect 0 undo --yes
 [ ! -e "$HOME/.nv/nvidia-application-profiles-rc.d/50-acb-cs2" ] || fail "undo left acb's profile file"
 ok "NVIDIA application profile: acb's own file written, the target's left, undo removed it"
 
-# 5. Flatpak's root, with the native ones gone.
+# 5. A store folder left open to other users (0777) is closed again before acb writes a record into it.
+rm -rf "$HOME/.local/state/cs2opendev"
+mkdir -p "$store" && chmod 777 "$store" "$(dirname "$store")"
+expect 0 restore "$work/backup.zip" --yes
+[ "$(stat -c %a "$store")" = 700 ] || fail "the store is still mode $(stat -c %a "$store")"
+[ "$(stat -c %a "$(dirname "$store")")" = 700 ] || fail "the store's parent is still mode $(stat -c %a "$(dirname "$store")")"
+expect 0 undo --yes
+ok "a store left open to others is closed (0700) before a record goes in"
+
+# 6. Flatpak's root, with the native ones gone.
 rm -rf "$steam" "$HOME/.steam"
 flat="$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam"
 bash "$fixture" "$flat" 69413322 "echo flatpak" "-target" > /dev/null

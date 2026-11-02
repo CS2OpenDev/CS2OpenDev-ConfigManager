@@ -7,7 +7,7 @@ away after the run, which is the only reason the scripts may change it: each one
 
 | Layer | Where | Runs | Proves |
 |---|---|---|---|
-| `linux/` | Ubuntu container, non-root `player` | every CI run | Steam found through `~/.steam/steam` and Flatpak's root; restore and undo with the default store at 0700; CS2 running leaves its parts; a read-only cfg folder; the NVIDIA application profile written as acb's own file, the player's left |
+| `linux/` | Ubuntu container, non-root `player` | every CI run | Steam found through `~/.steam/steam` and Flatpak's root; restore and undo with the default store at 0700, also when the store was left open; CS2 running leaves its parts; a read-only cfg folder; the NVIDIA application profile written as acb's own file, the player's left |
 | `windows/` | Server Core container (process isolation), standard user and ContainerAdministrator | every CI run | Steam found through `HKCU\Software\Valve\Steam\SteamPath`; restore and undo as a standard user; CS2 running; real NTFS deny entries, locked files and the read-only attribute; an administrator's acb writes nothing through the Steam folder. It also reports, without asserting, what the HKCU sections, powercfg and the store's ACL do in a container |
 | `windows-vm/` | the GitHub-hosted Windows runner itself | nightly, on demand, pushes to main | the Game Bar registry values and the power plan really restored and undone through the real registry and powercfg |
 

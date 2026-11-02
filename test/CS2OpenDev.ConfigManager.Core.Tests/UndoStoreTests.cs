@@ -13,6 +13,37 @@ namespace CS2OpenDev.ConfigManager.Tests;
 /// </summary>
 public class UndoStoreTests
 {
+    /// <summary>
+    ///     On Linux the player's store is private every time it is used: one left open to other users (0777) is closed,
+    ///     with the folders above it that are acb's, so nobody else can change a record before an undo reads it.
+    /// </summary>
+    [Test]
+    public async Task TheUserStore_IsClosedToOthers_EvenWhenItWasMadeOpen()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Skip.Test("Unix modes are Linux's; Windows' store sits in the user's own profile");
+            return;
+        }
+
+        using TempDir temp = new();
+        string root = Path.Combine(temp.Path, "cs2opendev", "configbackup", "undo");
+        Directory.CreateDirectory(root);
+        const UnixFileMode Open = (UnixFileMode)0b111_111_111;
+        foreach (string dir in new[] { root, Path.GetDirectoryName(root)!, Path.GetDirectoryName(Path.GetDirectoryName(root))! })
+        {
+            File.SetUnixFileMode(dir, Open);
+        }
+
+        new UndoStore(root, isMachine: false).EnsureUserStore();
+
+        const UnixFileMode Private = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        await Assert.That(File.GetUnixFileMode(root)).IsEqualTo(Private);
+        await Assert.That(File.GetUnixFileMode(Path.GetDirectoryName(root)!)).IsEqualTo(Private);
+        await Assert.That(File.GetUnixFileMode(Path.GetDirectoryName(Path.GetDirectoryName(root))!)).IsEqualTo(Private);
+        await Assert.That(File.GetUnixFileMode(temp.Path)).IsNotEqualTo(Private).Because("a folder that is not acb's keeps its mode");
+    }
+
     private const string Autoexec = "autoexec.cfg";
 
     /// <summary>Two restores of the same part, A then B, over a target whose autoexec.cfg was "echo original".</summary>
