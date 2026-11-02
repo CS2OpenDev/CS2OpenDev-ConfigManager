@@ -1,0 +1,60 @@
+# Build + test on every push to main and every pull request.
+#
+# No credentials required: every dependency, the DemoViewer.NET extension SDK included, restores from
+# nuget.org, so forks and outside contributors get a working build.
+#
+# Both platforms the tool supports run the suites and publish acb Native AOT for their own runtime, so a trim
+# or AOT warning fails the build where it appears. Restores in the suites write only into fake Steam folders
+# and undo stores in temp; no test touches the runner's own Steam, registry, display or driver settings.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # Nerdbank.GitVersioning needs full history
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore tools (nbgv)
+        run: dotnet tool restore
+
+      - name: Build (Release)
+        run: dotnet build CS2OpenDev.ConfigManager.slnx -c Release
+
+      # TUnit executables, so they run via `dotnet run`, not `dotnet test`.
+      - name: Core tests
+        run: dotnet run --project test/CS2OpenDev.ConfigManager.Core.Tests -c Release --no-build
+
+      - name: acb tests
+        run: dotnet run --project test/CS2OpenDev.ConfigManager.Cli.Tests -c Release --no-build
+
+      - name: DemoViewer.NET plugin tests
+        run: dotnet run --project test/CS2OpenDev.ConfigManager.DemoViewer.Tests -c Release --no-build
+
+      # Native AOT needs the platform linker: the MSVC tools on windows-latest, found through vswhere.exe,
+      # and clang on ubuntu-latest.
+      - name: Put vswhere on PATH
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "C:/Program Files (x86)/Microsoft Visual Studio/Installer" >> "$GITHUB_PATH"
+
+      - name: Publish acb (Native AOT)
+        shell: bash
+        run: dotnet publish src/CS2OpenDev.ConfigManager.Cli -c Release -r ${{ runner.os == 'Windows' && 'win-x64' || 'linux-x64' }}
