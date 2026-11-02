@@ -77,6 +77,26 @@ public class WizardTests
         }
     }
 
+    /// <summary>Review shows a settings part as a table: each setting as this PC has it, and as the restore would leave it.</summary>
+    [Test]
+    public async Task Review_ShowsEachSettingsCurrentAndNewValue()
+    {
+        (TestHost host, FakeSteam source, FakeSteam target, string zip) = Setup(Sections.Launch);
+        using (host)
+        using (source)
+        using (target)
+        {
+            RestoreFlow flow = new(host.Host()) { ArchivePath = zip, SteamPath = target.Root };
+            await Assert.That(flow.Check()).IsTrue();
+
+            SectionReview launch = flow.Review().Single(r => r.Section == Sections.Launch);
+            await Assert.That(launch.Settings).IsEquivalentTo([new SettingChange(Sections.Launch, "launch options", "-novid -high", "-novid -freq 360")]);
+            IReadOnlyList<string> table = RestoreFlow.SettingLines(launch);
+            await Assert.That(table[0]).StartsWith("Setting");
+            await Assert.That(table[1]).Contains("-novid -high").And.Contains("-novid -freq 360");
+        }
+    }
+
     /// <summary>Review names each file new, changed or the same here, and shows a changed file's lines against the backup's.</summary>
     [Test]
     public async Task Review_MarksEachFile_AndDiffsAChangedOne()

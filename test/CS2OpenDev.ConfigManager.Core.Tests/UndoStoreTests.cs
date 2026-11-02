@@ -385,30 +385,6 @@ public class UndoStoreTests
     }
 
     /// <summary>
-    ///     v1's NVIDIA rule, which no test can run without writing a real driver: every write in the
-    ///     restore goes to the profile FindCs2Profile returned, never to the global profile, which is only read.
-    /// </summary>
-    [Test]
-    public async Task TheNvidiaRestore_WritesOnlyTheCs2Profile()
-    {
-        string source = await File.ReadAllTextAsync(Path.Combine(CS2OpenDev.ConfigManager.Testing.Repository.Root,
-            "src", "CS2OpenDev.ConfigManager.Core", "Kit", "ConfigBackup.cs"));
-        int start = source.IndexOf("case Sections.Nvidia:", source.IndexOf("private static void RestoreSection(", StringComparison.Ordinal), StringComparison.Ordinal);
-        string restore = source[start..source.IndexOf("case Sections.Vibrance:", start, StringComparison.Ordinal)];
-
-        await Assert.That(restore).Contains("IntPtr profile = drs.FindCs2Profile();");
-        await Assert.That(System.Text.RegularExpressions.Regex.Count(restore, @"\bprofile = ")).IsEqualTo(1)
-            .Because("the profile written is never reassigned");
-        foreach (System.Text.RegularExpressions.Match write in System.Text.RegularExpressions.Regex.Matches(restore, @"drs\.(SetSetting|ResetSetting)\(([^,]+),"))
-        {
-            await Assert.That(write.Groups[2].Value).IsEqualTo("profile").Because(write.Value);
-        }
-
-        await Assert.That(restore).DoesNotContain("SetSetting(drs.GlobalProfile()");
-        await Assert.That(NvidiaDrs.IsCarriedSetting(0xDEADBEEF)).IsFalse();
-    }
-
-    /// <summary>
     ///     steamIds is checked against the signer the reader verified, not only the level: an identity-level backup
     ///     signed by an account the policy does not name, or with no checked signer, is refused.
     /// </summary>

@@ -77,15 +77,10 @@ internal sealed class TestHost : IDisposable
     public Action<string>? BeforeRollback { get; set; }
 
     /// <summary>
-    ///     Starts NVIDIA's driver API for the engine. By default the real one, whose failure is taken as one that may
-    ///     pass, so the administrator's flow is the same on a PC with the driver and on one without (CI).
+    ///     Stands in for starting NVIDIA's driver API, for a test of a driver that fails or hangs; null leaves it to
+    ///     <see cref="Machine" />, the fake, so no test depends on this PC's GPU.
     /// </summary>
-    public NvidiaStarter StartNvidia { get; set; } = (out bool mayPass) =>
-    {
-        string? why = NvidiaDrs.Initialize(out _);
-        mayPass = true;
-        return why!;
-    };
+    public NvidiaStarter? StartNvidia { get; set; }
 
     /// <summary>How long the engine waits for an NVIDIA driver part.</summary>
     public int DriverTimeoutMs { get; set; } = ConfigBackup.DriverPartTimeoutMs;
@@ -105,6 +100,9 @@ internal sealed class TestHost : IDisposable
 
     /// <summary>Stands in for the wizard when acb is run with no command at a terminal.</summary>
     public Func<AcbHost, int>? Wizard { get; set; }
+
+    /// <summary>The registry, power plans and driver acb sees: in memory, never this PC's. Null leaves the engine's default, which refuses this PC in a test.</summary>
+    public FakeMachine? Machine { get; set; } = new();
 
     public int Run(params string[] args) => Acb.Run(args, Host());
 
@@ -148,7 +146,8 @@ internal sealed class TestHost : IDisposable
             BeforeRollback = BeforeRollback,
             StartNvidia = StartNvidia,
             DriverTimeoutMs = DriverTimeoutMs,
-            Wizard = Wizard
+            Wizard = Wizard,
+            Machine = Machine
         };
     }
 

@@ -85,19 +85,48 @@ namespace CS2OpenDev.ConfigManager.Kit
             }
             else
             {
-                string home = Environment.GetEnvironmentVariable("HOME") ?? "";
-                candidates.Add(Path.Combine(home, ".steam/steam"));
-                candidates.Add(Path.Combine(home, ".local/share/Steam"));
-                candidates.Add(Path.Combine(home, ".var/app/com.valvesoftware.Steam/.local/share/Steam"));
-                candidates.Add(Path.Combine(home, "Library/Application Support/Steam"));
+                return LocateUnderHome(Environment.GetEnvironmentVariable("HOME") ?? "");
             }
 
+            return FirstSteam(candidates);
+        }
+
+        /// <summary>
+        ///     The Linux Steam roots under <paramref name="home" />, in order: ~/.steam/steam (usually a link to one of
+        ///     the others), ~/.local/share/Steam, and Flatpak's. Tests pass a home of their own; nothing else is looked at.
+        /// </summary>
+        internal static SteamInstall LocateUnderHome(string home)
+        {
+            List<string> candidates = new List<string>();
+            candidates.Add(Path.Combine(home, ".steam", "steam"));
+            candidates.Add(Path.Combine(home, ".local", "share", "Steam"));
+            candidates.Add(Path.Combine(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"));
+            return FirstSteam(candidates);
+        }
+
+        /// <summary>
+        ///     The first candidate that holds a Steam install, by the folder a link points to, so one Steam is always
+        ///     named by one path (records compare the Steam folder their restore wrote to by path).
+        /// </summary>
+        private static SteamInstall FirstSteam(List<string> candidates)
+        {
             foreach (string candidate in candidates)
             {
-                if (Directory.Exists(Path.Combine(candidate, "steamapps")) || Directory.Exists(Path.Combine(candidate, "userdata")))
+                if (!Directory.Exists(Path.Combine(candidate, "steamapps")) && !Directory.Exists(Path.Combine(candidate, "userdata")))
                 {
-                    return new SteamInstall(Path.GetFullPath(candidate));
+                    continue;
                 }
+
+                FileSystemInfo target = null;
+                try
+                {
+                    target = new DirectoryInfo(candidate).ResolveLinkTarget(true);
+                }
+                catch (IOException)
+                {
+                }
+
+                return new SteamInstall(target != null ? target.FullName : Path.GetFullPath(candidate));
             }
 
             return null;

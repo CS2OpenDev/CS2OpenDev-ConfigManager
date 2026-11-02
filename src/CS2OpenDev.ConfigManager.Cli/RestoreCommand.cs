@@ -257,6 +257,7 @@ internal static class RestoreCommand
         Platform = host.Platform,
         IsRunning = host.IsRunning,
         LocateSteam = host.LocateSteam,
+        Machine = host.Machine,
         AsAdministrator = elevation.Kind == ElevationKind.Elevated,
         BeforeRollback = host.BeforeRollback,
         StartNvidia = host.StartNvidia,

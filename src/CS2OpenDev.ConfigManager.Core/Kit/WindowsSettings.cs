@@ -465,6 +465,46 @@ namespace CS2OpenDev.ConfigManager.Kit
             }
         }
 
+        /// <summary>
+        ///     Why this user cannot write a value under <paramref name="subKey" /> in HKCU, or null: the key, or the
+        ///     nearest one above it that exists (where a missing key would be made), opened for writing and closed
+        ///     again. Nothing is created or changed.
+        /// </summary>
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+        public static string RegistryWriteProblem(string subKey)
+        {
+            string path = subKey;
+            while (true)
+            {
+                try
+                {
+                    using (RegistryKey key = Registry.CurrentUser.OpenSubKey(path, true))
+                    {
+                        if (key != null)
+                        {
+                            return null;
+                        }
+                    }
+                }
+                catch (System.Security.SecurityException ex)
+                {
+                    return ex.Message;
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    return ex.Message;
+                }
+
+                int cut = path.LastIndexOf('\\');
+                if (cut < 0)
+                {
+                    return null;
+                }
+
+                path = path.Substring(0, cut);
+            }
+        }
+
         /// <summary>Whether <see cref="WriteRegistry" /> can write this kind and data, checked before any value is written.</summary>
         public static bool IsValidRegistryData(string kind, string data)
         {

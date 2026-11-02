@@ -9,8 +9,8 @@ namespace CS2OpenDev.ConfigManager.Cli.Tests;
 
 /// <summary>
 ///     What v1 taught, each held by a test of acb itself: rules kept from v1 (Keep_), and v1 bugs that must not come
-///     back (NotAgain_). See also UndoStoreTests.TheNvidiaRestore_WritesOnlyTheCs2Profile, which reads the source,
-///     since no test may write a real driver, and UndoStoreTests.AStoreFolderAPlayerMadeFirst_IsRefused.
+///     back (NotAgain_). See also MachineSectionsTests.Nvidia_WritesOnlyTheCs2Profile_OnRestoreAndUndo and
+///     UndoStoreTests.AStoreFolderAPlayerMadeFirst_IsRefused in Core's suite.
 /// </summary>
 public class V1LessonsTests
 {

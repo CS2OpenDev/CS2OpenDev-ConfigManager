@@ -53,7 +53,7 @@ namespace CS2OpenDev.ConfigManager.Kit
     ///     struct layouts are NVIDIA's published ones (NVIDIA/nvapi on GitHub: nvapi_interface.h and nvapi.h;
     ///     NVDRS_SETTING is packed to 4 and 12320 bytes). Reading needs no rights; saving needs an administrator.
     /// </summary>
-    public sealed class NvidiaDrs : IDisposable
+    public sealed class NvidiaDrs : INvidiaSession
     {
         public const string Cs2Exe = "cs2.exe";
 

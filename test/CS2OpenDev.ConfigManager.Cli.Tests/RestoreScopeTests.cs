@@ -178,12 +178,12 @@ public class RestoreScopeTests
     }
 
     /// <summary>
-    ///     In a test assembly the engine refuses to write a Windows or driver section, so a test that restores one
-    ///     where it meant to plan fails instead of changing this PC. The archive's only entry is also one the carried
-    ///     list refuses, so even without the refusal nothing could be written.
+    ///     acb's tests restore Windows sections into a fake machine; one whose host has none is refused before it reads
+    ///     or writes this PC. The archive's only entry is also one the carried list refuses, so even the fake is not
+    ///     written.
     /// </summary>
     [Test]
-    public async Task ATestRun_NeverWritesThisPcsWindowsSettings()
+    public async Task ATestRun_NeverReachesThisPcsWindowsSettings()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -218,11 +218,34 @@ public class RestoreScopeTests
         int code = host.Run("restore", "--yes", "--steam-path", target.Root, zip);
 
         await Assert.That(code).IsEqualTo(ExitCodes.PartFailed).Because(host.All);
-        await Assert.That(host.Output).Contains("a test run never writes this PC's Windows or driver settings");
-        await Assert.That(host.Records()).IsEmpty();
-        // A plan still runs the section, so the tests that preview machine sections keep working.
-        await Assert.That(host.Run("plan", "--steam-path", target.Root, zip)).IsEqualTo(ExitCodes.PartFailed).Because(host.All);
         await Assert.That(host.Output).Contains("does not carry");
+        await Assert.That(host.Machine!.Writes).IsEmpty();
+        await Assert.That(host.Records()).IsEmpty();
+
+        // A carried value gets past the list to the machine, which without a fake refuses even to read.
+        string carried = TestArchives.Craft(host.Temp, """
+            "ConfigBackup"
+            {
+            	"format"		"1"
+            	"kind"		"backup"
+            	"gamebar"
+            	{
+            		"registry"
+            		{
+            			"0"
+            			{
+            				"key"		"Software\\Microsoft\\GameBar"
+            				"name"		"AutoGameModeEnabled"
+            				"kind"		"dword"
+            				"data"		"1"
+            			}
+            		}
+            	}
+            }
+            """);
+        host.Machine = null;
+        await Assert.That(host.Run("plan", "--steam-path", target.Root, carried)).IsEqualTo(ExitCodes.PartFailed).Because(host.All);
+        await Assert.That(host.Output).Contains(RefusingMachine.Message);
     }
 
     /// <summary>

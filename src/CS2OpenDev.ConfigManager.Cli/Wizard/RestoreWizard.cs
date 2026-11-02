@@ -245,7 +245,9 @@ internal sealed class RestoreWizard : IDisposable
         }
 
         (SectionReview section, FileChange? file) = _reviewRows[row];
-        Show(_reviewText, file is null ? [$"{section.Label}: {section.Outcome}", section.Detail] : _flow.Diff(file));
+        Show(_reviewText, file is null
+            ? [$"{section.Label}: {section.Outcome}", section.Detail, "", .. RestoreFlow.SettingLines(section)]
+            : _flow.Diff(file));
     }
 
     private void ShowChoose()

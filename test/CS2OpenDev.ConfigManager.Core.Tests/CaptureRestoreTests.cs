@@ -427,11 +427,11 @@ public class CaptureRestoreTests
     };
 
     /// <summary>
-    ///     In a test assembly the engine refuses to write a Windows or driver section, before the first read or write,
-    ///     so a test can never change this PC. The only entry is one the carried list refuses as well.
+    ///     In a test assembly the engine's default machine refuses this PC, reading included, so a test that passes no
+    ///     fake fails instead of reading or changing the registry, power plan or driver; a plan is refused too.
     /// </summary>
     [Test]
-    public async Task ATestRun_NeverWritesAWindowsSection()
+    public async Task ATestRun_WithoutAFakeMachine_NeverReachesThisPc()
     {
         await Assert.That(KitBackup.MachineWritesRefused).IsTrue();
         using FakeSteam target = new();
@@ -452,12 +452,16 @@ public class CaptureRestoreTests
         options.Only = [Sections.Input];
         options.WriteUndo = true;
 
-        SectionResult result = Engine.Restore(temp.Path, options).Results.Single();
-
-        await Assert.That(result.Outcome).IsEqualTo(OperatingSystem.IsWindows() ? Outcomes.Failed : Outcomes.Skipped).Because(result.ToString());
-        if (OperatingSystem.IsWindows())
+        foreach (bool dryRun in new[] { false, true })
         {
-            await Assert.That(result.Detail).Contains("a test run never writes this PC's Windows or driver settings");
+            options.DryRun = dryRun;
+            SectionResult result = Engine.Restore(temp.Path, options).Results.Single();
+
+            await Assert.That(result.Outcome).IsEqualTo(OperatingSystem.IsWindows() ? Outcomes.Failed : Outcomes.Skipped).Because(result.ToString());
+            if (OperatingSystem.IsWindows())
+            {
+                await Assert.That(result.Detail).Contains(RefusingMachine.Message);
+            }
         }
     }
 

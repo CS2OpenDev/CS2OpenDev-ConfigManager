@@ -16,6 +16,7 @@
         <Compile Include="..\CS2OpenDev.ConfigManager.Core.Tests\FakeSteam.cs" Link="Shared\FakeSteam.cs"/>
         <Compile Include="..\CS2OpenDev.ConfigManager.Core.Tests\Permissions.cs" Link="Shared\Permissions.cs"/>
         <Compile Include="..\CS2OpenDev.ConfigManager.Core.Tests\NoMachineWrites.cs" Link="Shared\NoMachineWrites.cs"/>
+        <Compile Include="..\CS2OpenDev.ConfigManager.Core.Tests\FakeMachine.cs" Link="Shared\FakeMachine.cs"/>
     </ItemGroup>
 
     <ItemGroup>

@@ -33,6 +33,9 @@ internal sealed record UndoRunOptions
     /// <summary>Finds Steam; null uses <see cref="SteamInstall.Locate" />. See <see cref="RestoreOptions.LocateSteam" />.</summary>
     public Func<string?, SteamInstall?>? LocateSteam { get; init; }
 
+    /// <summary>The registry, power plans and driver; null is this PC. Tests pass a fake.</summary>
+    public IMachine? Machine { get; init; }
+
     /// <summary>Sections this run leaves in every record, each with the reason it reports; they hold back older records too.</summary>
     public IReadOnlyDictionary<string, string>? Leave { get; init; }
 
@@ -143,7 +146,8 @@ internal static class UndoRunner
                 WriteUndo = false,
                 DryRun = options.DryRun,
                 ProcessCheck = options.ProcessCheck,
-                LocateSteam = options.LocateSteam
+                LocateSteam = options.LocateSteam,
+                Machine = options.Machine
             };
             RunReport report = ConfigBackup.Restore(new FolderSource(record.Dir, record.Manifest), RestoreMode.Undo, restoreOptions, log);
             foreach (string part in record.Parts.Where(p => options.Leave?.ContainsKey(p) == true && !heldBack.Contains(p) && wanted.Contains(p)))

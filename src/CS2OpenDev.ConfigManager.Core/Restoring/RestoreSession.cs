@@ -29,6 +29,9 @@ internal sealed class RestoreEnvironment
 
     /// <summary>How long the engine waits for an NVIDIA driver part. Tests only.</summary>
     public int DriverTimeoutMs { get; init; } = ConfigBackup.DriverPartTimeoutMs;
+
+    /// <summary>The registry, power plans and driver; null is this PC. Tests pass a fake.</summary>
+    public IMachine? Machine { get; init; }
 }
 
 /// <summary>A restore refused before anything changed, with the archive when it was verified, so its header can still be shown.</summary>
@@ -424,6 +427,7 @@ internal sealed class RestoreSession
         UndoRoot = undoRoot,
         ProcessCheck = _environment.IsRunning,
         LocateSteam = _environment.LocateSteam,
+        Machine = _environment.Machine,
         BeforeRollback = _environment.BeforeRollback,
         StartNvidia = _environment.StartNvidia,
         DriverTimeoutMs = _environment.DriverTimeoutMs,

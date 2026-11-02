@@ -101,6 +101,7 @@ internal static class UndoCommand
             DryRun = dryRun,
             ProcessCheck = host.IsRunning,
             LocateSteam = host.LocateSteam,
+            Machine = host.Machine,
             OnUnreadable = host.Interactive && !yes ? record => AskUnreadable(record, "", host) : null,
             // An administrator's acb writes nothing through the Steam folder, which other users can change.
             Leave = elevated ? Sections.All.Where(RestoreRules.LeftByAdministrator).ToDictionary(s => s, _ => RestoreCommand.SteamLeftDetail(elevation)) : null
@@ -176,7 +177,8 @@ internal static class UndoCommand
             Only = Archives.Sections(line.List("only")),
             Ids = line.List("id") is { } ids ? [.. ids] : null,
             ProcessCheck = host.IsRunning,
-            LocateSteam = host.LocateSteam
+            LocateSteam = host.LocateSteam,
+            Machine = host.Machine
         }, null);
         Report(outcomes, AdminPrefix, output);
         return output.Finish(ExitCodes.For(outcomes));
@@ -203,6 +205,7 @@ internal static class UndoCommand
                 Ids = ids is { Count: > 0 } ? ids : null,
                 ProcessCheck = host.IsRunning,
                 LocateSteam = host.LocateSteam,
+                Machine = host.Machine,
                 OnUnreadable = host.Interactive && !yes ? record => AskUnreadable(record, AdminPrefix, host) : null
             }, null);
             Report(outcomes, AdminPrefix, output);

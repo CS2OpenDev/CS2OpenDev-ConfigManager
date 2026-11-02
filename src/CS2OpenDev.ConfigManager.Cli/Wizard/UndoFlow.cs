@@ -337,6 +337,7 @@ internal sealed class UndoFlow
             MachineStoreParent = quiet.MachineStoreParent,
             IsRunning = quiet.IsRunning,
             LocateSteam = quiet.LocateSteam,
+            Machine = quiet.Machine,
             Elevation = quiet.Elevation,
             Elevator = quiet.Elevator,
             ConnectElevated = quiet.ConnectElevated,
@@ -364,7 +365,8 @@ internal sealed class UndoFlow
         SteamRoot = SteamPath.Length == 0 ? null : Path.GetFullPath(SteamPath),
         DryRun = dryRun,
         ProcessCheck = _host.IsRunning,
-        LocateSteam = _host.LocateSteam
+        LocateSteam = _host.LocateSteam,
+        Machine = _host.Machine
     };
 
     private static List<UndoFile> Files(RecordOutcome outcome)

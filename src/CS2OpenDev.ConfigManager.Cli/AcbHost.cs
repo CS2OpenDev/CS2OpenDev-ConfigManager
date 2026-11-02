@@ -7,9 +7,8 @@ namespace CS2OpenDev.ConfigManager.Cli;
 /// <summary>
 ///     Everything acb reaches outside its own process: the console, the undo stores, running processes, where
 ///     Steam is, the administrator question and the clock. <see cref="Real" /> is the machine; tests build one
-///     around temp folders and stand-ins, so no test needs the real Steam folder or UAC. The registry, power plan
-///     and driver are not behind this yet: a test reaches them only through a section it restores, so tests restore
-///     those sections only as a plan.
+///     around temp folders and stand-ins, so no test needs the real Steam folder or UAC. The registry, power plans
+///     and driver are reached through <see cref="Machine" />, which tests set to a fake.
 /// </summary>
 internal sealed class AcbHost
 {
@@ -50,6 +49,9 @@ internal sealed class AcbHost
 
     /// <summary>Creates and checks the machine store before an elevated run writes to it; throws when it may not be used.</summary>
     public required Action<string, string> EnsureMachineStore { get; init; }
+
+    /// <summary>The registry, power plans and driver the engine reads and changes; null is this PC. Tests pass a fake.</summary>
+    internal IMachine? Machine { get; init; }
 
     /// <summary>Runs the wizard on the terminal and returns its exit code; null where there is no screen to draw on (tests).</summary>
     public Func<AcbHost, int>? Wizard { get; init; }
@@ -108,6 +110,7 @@ internal sealed class AcbHost
         MachineStoreParent = MachineStoreParent,
         IsRunning = IsRunning,
         LocateSteam = LocateSteam,
+        Machine = Machine,
         Elevation = Elevation,
         Elevator = Elevator,
         ConnectElevated = ConnectElevated,

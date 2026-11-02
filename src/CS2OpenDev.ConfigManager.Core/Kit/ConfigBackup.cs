@@ -166,6 +166,9 @@ namespace CS2OpenDev.ConfigManager.Kit
 
         /// <summary>Checked between parts: a cancelled capture stops before the next part starts.</summary>
         public CancellationToken Cancellation { get; set; }
+
+        /// <summary>The registry, power plans and driver read; null is this PC (refused while a test assembly runs).</summary>
+        internal IMachine Machine { get; set; }
     }
 
     /// <summary>
@@ -315,6 +318,9 @@ namespace CS2OpenDev.ConfigManager.Kit
 
         /// <summary>Starts NVAPI; null uses <see cref="NvidiaDrs.Initialize(out bool)" />. Tests stand in for a PC without the driver.</summary>
         internal NvidiaStarter StartNvidia { get; set; }
+
+        /// <summary>The registry, power plans and driver changed; null is this PC (refused while a test assembly runs).</summary>
+        internal IMachine Machine { get; set; }
 
         /// <summary>How long a part that calls into the NVIDIA driver may take. Tests shorten it.</summary>
         internal int DriverTimeoutMs { get; set; }
@@ -472,6 +478,9 @@ namespace CS2OpenDev.ConfigManager.Kit
         /// </summary>
         public List<string> Observed { get; private set; } = new List<string>();
 
+        /// <summary>Each setting a run would change or changed, with the value the PC had and the one it gets, for a person to review.</summary>
+        public List<SettingChange> Settings { get; private set; } = new List<SettingChange>();
+
         /// <summary>
         ///     Driver parts given up on after their worker may have started changing the PC, so what they changed is
         ///     not known. The worker may be cut off at any point, by process exit too; every driver write is recorded
@@ -554,11 +563,17 @@ namespace CS2OpenDev.ConfigManager.Kit
         public const string VideoFile = "cs2_video.txt";
 
         /// <summary>
-        ///     Set by the test assemblies when they load: a restore, undo or rollback that would write a Windows or
-        ///     driver section throws before its first read or write, and looking for this PC's own Steam throws, so a
-        ///     test can never change the PC it runs on.
+        ///     Set by the test assemblies when they load: the engine's default machine refuses every read and write of
+        ///     this PC's registry, power plan and driver (tests pass a fake), and looking for this PC's own Steam
+        ///     throws, so a test can never read or change the PC it runs on.
         /// </summary>
         internal static bool MachineWritesRefused { get; set; }
+
+        /// <summary>The machine a run reads and changes: the one it was given, else this PC, which a test assembly refuses.</summary>
+        internal static IMachine MachineOf(IMachine given)
+        {
+            return given ?? (MachineWritesRefused ? (IMachine)RefusingMachine.Instance : RealMachine.Instance);
+        }
 
         /// <summary>The keys in cs2_video.txt that describe the GPU and monitor rather than the player's choices.</summary>
         public static readonly string[] VideoHardwareKeys = { "VendorID", "DeviceID", "setting.monitor_index", "setting.knowndevice", "Autoconfig" };
@@ -945,6 +960,13 @@ namespace CS2OpenDev.ConfigManager.Kit
                 return;
             }
 
+            // On Linux the NVIDIA part is the driver's application profiles, files in the user's home.
+            if (section == Sections.Nvidia && !Platform.IsWindows)
+            {
+                CaptureLinuxNvidia(MachineOf(options.Machine), manifest, report, log);
+                return;
+            }
+
             if (Sections.IsMachineWide(section) && !Platform.IsWindows)
             {
                 report.Add(log, section, Outcomes.Skipped, "only on Windows");
@@ -1014,7 +1036,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                 {
                     // Only a hotkey that is off travels: a restore turns the target's off and never turns one on.
                     KvNode node = manifest.Section(section);
-                    foreach (KeyValuePair<string, string> pair in WindowsSettings.ReadHotkeys())
+                    foreach (KeyValuePair<string, string> pair in MachineOf(options.Machine).ReadHotkeys())
                     {
                         if (pair.Value == "0")
                         {
@@ -1043,7 +1065,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     }
 
                     KvNode node = manifest.Section(section);
-                    int n = CaptureRegistry(section, node, exe);
+                    int n = CaptureRegistry(MachineOf(options.Machine), section, node, exe);
                     if (node.Child("registry") == null)
                     {
                         manifest.Remove(section);
@@ -1057,7 +1079,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                 }
                 case Sections.Power:
                 {
-                    string[] plan = WindowsSettings.ActivePowerPlan();
+                    string[] plan = MachineOf(options.Machine).ActivePowerPlan();
                     if (plan == null)
                     {
                         report.Add(log, section, Outcomes.Skipped, "the active power plan could not be read");
@@ -1070,7 +1092,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     // Only Windows' own templates travel: a plan of the user's own carries this PC's hardware
                     // settings. A copy named like a template (Ultimate Performance made with powercfg
                     // -duplicatescheme) is recorded with that template, which another PC can copy.
-                    string template = WindowsSettings.PowerPlanTemplate(plan[0], plan[1], WindowsSettings.PowerPlans());
+                    string template = WindowsSettings.PowerPlanTemplate(plan[0], plan[1], MachineOf(options.Machine).PowerPlans());
                     if (template != null && !string.Equals(template, plan[0], StringComparison.OrdinalIgnoreCase))
                     {
                         node.Set("template", template);
@@ -1083,7 +1105,8 @@ namespace CS2OpenDev.ConfigManager.Kit
                 }
                 case Sections.Nvidia:
                 {
-                    string why = NvidiaDrs.Initialize();
+                    bool mayPassIgnored;
+                    string why = MachineOf(options.Machine).StartNvidia(out mayPassIgnored);
                     if (why != null)
                     {
                         report.Add(log, section, Outcomes.Skipped, why);
@@ -1091,7 +1114,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     }
 
                     KvNode node = manifest.Section(section);
-                    string driver = NvidiaDrs.DriverVersion();
+                    string driver = MachineOf(options.Machine).NvidiaDriverVersion();
                     if (driver != null)
                     {
                         node.Set("driver", driver);
@@ -1101,7 +1124,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     // a setting the driver decides is recorded absent, so a restore resets the target's.
                     int changed = 0;
                     KvNode list = node.Section("cs2").Section("settings");
-                    using (NvidiaDrs drs = NvidiaDrs.Open())
+                    using (INvidiaSession drs = MachineOf(options.Machine).OpenNvidia())
                     {
                         IntPtr profile = drs.FindCs2Profile();
                         if (profile == IntPtr.Zero)
@@ -1132,7 +1155,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                 }
                 case Sections.Vibrance:
                 {
-                    IList<int[]> levels = NvidiaDrs.ReadVibrance();
+                    IList<int[]> levels = MachineOf(options.Machine).ReadVibrance();
                     if (levels.Count == 0)
                     {
                         report.Add(log, section, Outcomes.Skipped, "no NVIDIA display reports digital vibrance");
@@ -1165,7 +1188,7 @@ namespace CS2OpenDev.ConfigManager.Kit
 
         /// <summary>Records a group's registry values, as <see cref="RegistryEntryForBackup" /> decides. Returns how many values hold something.</summary>
         [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-        private static int CaptureRegistry(string group, KvNode node, string cs2Exe)
+        private static int CaptureRegistry(IMachine machine, string group, KvNode node, string cs2Exe)
         {
             int n = 0;
             KvNode list = node.Section("registry");
@@ -1179,7 +1202,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                 string valueName = item.ValueName == RegistryItem.Cs2ExeToken ? cs2Exe : item.ValueName;
                 string kind = null;
                 string data = null;
-                bool present = valueName != null && WindowsSettings.ReadRegistry(item.SubKey, valueName, out kind, out data);
+                bool present = valueName != null && machine.ReadRegistry(item.SubKey, valueName, out kind, out data);
                 // A plain value of another kind than Windows reads (a tweak script's string "0") does not take
                 // effect, so it counts as unset; a merged value is recorded as the string a restore merges.
                 if (present && !WindowsSettings.IsMergedValue(item.SubKey) && kind != item.Kind)
@@ -1426,7 +1449,9 @@ namespace CS2OpenDev.ConfigManager.Kit
                         detail = node.Get("name") ?? node.Get("guid");
                         break;
                     case Sections.Nvidia:
-                        detail = DescribeNvidia(node.Path("cs2", "settings"));
+                        detail = node.Child("linux") != null
+                            ? Inv.S(node.Child("linux").Children.Count) + " settings for the cs2 process"
+                            : DescribeNvidia(node.Path("cs2", "settings"));
                         break;
                     default:
                         detail = Inv.S(node.Children.Count) + " values";
@@ -2053,6 +2078,7 @@ namespace CS2OpenDev.ConfigManager.Kit
             }
 
             report.Observed.AddRange(partReport.Observed);
+            report.Settings.AddRange(partReport.Settings);
             if (error != null)
             {
                 System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
@@ -2144,6 +2170,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     WriteUndo = false,
                     SkipProcessChecks = true,
                     StartNvidia = options.StartNvidia,
+                    Machine = options.Machine,
                     DriverTimeoutMs = options.DriverTimeoutMs
                 };
                 RunReport result = new RunReport();
@@ -2218,6 +2245,7 @@ namespace CS2OpenDev.ConfigManager.Kit
             SteamInstall steam, UndoLog undoLog, string userSid, RunReport report, TextWriter log)
         {
             bool dry = options.DryRun;
+            IMachine machine = MachineOf(options.Machine);
             KvNode undo = undoLog == null ? null : undoLog.Manifest;
             bool needsSteam = Sections.NeedsSteam(section);
             if (needsSteam && steam == null)
@@ -2229,15 +2257,17 @@ namespace CS2OpenDev.ConfigManager.Kit
                 return;
             }
 
+            // On Linux the NVIDIA part is the driver's application profiles, files in the user's home.
+            if (section == Sections.Nvidia && !Platform.IsWindows)
+            {
+                RestoreLinuxNvidia(machine, node, backup, isUndo, dry, undoLog, report, log);
+                return;
+            }
+
             if (Sections.IsMachineWide(section) && !Platform.IsWindows)
             {
                 report.Add(log, section, Outcomes.Skipped, "only on Windows");
                 return;
-            }
-
-            if (!dry && MachineWritesRefused && Sections.IsMachineWide(section))
-            {
-                throw new InvalidOperationException("a test run never writes this PC's Windows or driver settings");
             }
 
             string backupAccount = BackupAccount(manifest);
@@ -2502,6 +2532,11 @@ namespace CS2OpenDev.ConfigManager.Kit
 
                     string localConfig = steam.LocalConfigPath(account);
                     report.Observed.Add(section + " " + localConfig + " " + (File.Exists(localConfig) ? Sha256(localConfig) : "absent"));
+                    string launchNow = steam.ReadLaunchOptions(account);
+                    if (launchNow != value)
+                    {
+                        report.Settings.Add(new SettingChange(section, "launch options", launchNow, value));
+                    }
                     if (undo != null)
                     {
                         string previous = steam.ReadLaunchOptions(account);
@@ -2531,7 +2566,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                 case Sections.Input:
                 {
                     // A backup only turns hotkeys off; its undo puts each back as the target had it.
-                    IDictionary<string, string> current = WindowsSettings.ReadHotkeys();
+                    IDictionary<string, string> current = machine.ReadHotkeys();
                     KvNode u = undo == null ? null : undo.Section(section);
                     int n = 0;
                     foreach (KvNode value in node.Children)
@@ -2548,6 +2583,8 @@ namespace CS2OpenDev.ConfigManager.Kit
                             continue;
                         }
 
+                        report.Settings.Add(new SettingChange(section, value.Key + " hotkey", previous == "1" ? "on" : "off", active ? "on" : "off"));
+
                         if (u != null)
                         {
                             u.Set(value.Key, previous);
@@ -2556,7 +2593,7 @@ namespace CS2OpenDev.ConfigManager.Kit
 
                         if (!dry)
                         {
-                            WindowsSettings.SetHotkey(value.Key, active);
+                            machine.SetHotkey(value.Key, active);
                         }
 
                         n++;
@@ -2579,7 +2616,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                         }
                     }
 
-                    int n = RestoreRegistry(node, exe, undoLog, section, dry, isUndo);
+                    int n = RestoreRegistry(machine, node, exe, undoLog, section, dry, isUndo, report);
                     report.Add(log, section, Outcomes.Done, Inv.S(n) + " registry values");
                     return;
                 }
@@ -2589,9 +2626,9 @@ namespace CS2OpenDev.ConfigManager.Kit
                     string name = node.Get("name");
                     string template = isUndo ? null : node.Get("template");
                     string shown = name ?? guid;
-                    string[] current = WindowsSettings.ActivePowerPlan();
+                    string[] current = machine.ActivePowerPlan();
                     string useGuid;
-                    string action = WindowsSettings.PowerPlanAction(guid, name, template, WindowsSettings.PowerPlans(), current == null ? null : current[0], out useGuid);
+                    string action = WindowsSettings.PowerPlanAction(guid, name, template, machine.PowerPlans(), current == null ? null : current[0], out useGuid);
                     string problem = null;
                     string created = null;
                     if (action == "missing")
@@ -2604,6 +2641,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     }
                     else if (dry)
                     {
+                        report.Settings.Add(new SettingChange(section, "active power plan", current == null ? null : current[1], shown));
                         report.Add(log, section, Outcomes.Done, (action == "copy" ? "would add Windows' " : "would switch to ") + shown);
                     }
                     else
@@ -2630,7 +2668,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                             // A Windows template this PC hides: a copy of it is listed, recorded, and removed by Undo.
                             // The record says a copy is being made before powercfg runs, so an undo can say so if
                             // acb stops before the copy's GUID is on record.
-                            ICollection<string> before = WindowsSettings.PowerPlans().Keys;
+                            ICollection<string> before = machine.PowerPlans().Keys;
                             if (u != null)
                             {
                                 u.Set("creating", useGuid);
@@ -2638,13 +2676,13 @@ namespace CS2OpenDev.ConfigManager.Kit
                             }
 
                             string copyOf = useGuid;
-                            useGuid = WindowsSettings.DuplicatePowerPlan(copyOf, out problem);
+                            useGuid = machine.DuplicatePowerPlan(copyOf, out problem);
                             if (useGuid == null)
                             {
                                 // powercfg stopped after 30 seconds, or failed after making the copy: a plan that
                                 // appeared meanwhile, the only one, is that copy, recorded so the rollback removes it.
                                 List<string> appeared = new List<string>();
-                                foreach (string listed in WindowsSettings.PowerPlans().Keys)
+                                foreach (string listed in machine.PowerPlans().Keys)
                                 {
                                     if (!before.Contains(listed) && !WindowsSettings.IsBuiltInPowerPlan(listed))
                                     {
@@ -2668,7 +2706,7 @@ namespace CS2OpenDev.ConfigManager.Kit
 
                         if (problem == null)
                         {
-                            problem = WindowsSettings.ActivatePowerPlan(useGuid);
+                            problem = machine.ActivatePowerPlan(useGuid);
                         }
 
                         // The record stays when the switch fails: powercfg may have switched before it failed or
@@ -2686,8 +2724,8 @@ namespace CS2OpenDev.ConfigManager.Kit
                     string added = isUndo ? node.Get("created") : null;
                     if (added != null && !dry && (action == "already" || problem == null))
                     {
-                        IDictionary<string, string> listed = WindowsSettings.PowerPlans();
-                        string[] active = WindowsSettings.ActivePowerPlan();
+                        IDictionary<string, string> listed = machine.PowerPlans();
+                        string[] active = machine.ActivePowerPlan();
                         string createdProblem = CreatedPlanProblem(added, active == null ? null : active[0]);
                         if (createdProblem != null)
                         {
@@ -2695,7 +2733,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                         }
                         else if (listed.ContainsKey(added))
                         {
-                            string deleteProblem = WindowsSettings.DeletePowerPlan(added);
+                            string deleteProblem = machine.DeletePowerPlan(added);
                             if (deleteProblem != null)
                             {
                                 report.Add(log, section, Outcomes.Failed, "could not remove the plan the restore added: " + deleteProblem);
@@ -2737,7 +2775,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     }
 
                     bool mayPass;
-                    string why = options.StartNvidia != null ? options.StartNvidia(out mayPass) : NvidiaDrs.Initialize(out mayPass);
+                    string why = options.StartNvidia != null ? options.StartNvidia(out mayPass) : machine.StartNvidia(out mayPass);
                     if (why != null)
                     {
                         // No driver or no NVIDIA GPU stays so: a restore has nothing to do here, while an undo keeps
@@ -2758,7 +2796,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     List<string> leftToGlobal = new List<string>();
                     // An undo's entries the driver would not take stay in the record for the next run.
                     List<string> kept = new List<string>();
-                    using (NvidiaDrs drs = NvidiaDrs.Open())
+                    using (INvidiaSession drs = machine.OpenNvidia())
                     {
                         IntPtr profile = drs.FindCs2Profile();
                         if (profile == IntPtr.Zero)
@@ -2793,6 +2831,11 @@ namespace CS2OpenDev.ConfigManager.Kit
                             bool absent = item.Get("absent") == "1";
                             NvSetting previous = drs.UserSetting(profile, id);
                             report.Observed.Add(section + " " + item.Key + " " + (previous == null ? "absent" : previous.Type + " " + previous.Value));
+                            string wantedValue = absent ? null : item.Get("value");
+                            if ((previous == null ? null : previous.Value) != wantedValue)
+                            {
+                                report.Settings.Add(new SettingChange(section, item.Get("name") ?? item.Key, previous == null ? null : previous.Value, wantedValue));
+                            }
                             // A value the undo could not write back is never replaced, so every undo entry is one it accepts.
                             if (!isUndo && previous != null && !CanRecordNvidia(item.Key, previous))
                             {
@@ -2963,14 +3006,14 @@ namespace CS2OpenDev.ConfigManager.Kit
                     // The driver is started first, as for the NVIDIA part, so a driver that is updating or recovering
                     // leaves the part for later instead of reading as a PC without NVIDIA displays.
                     bool vibranceMayPass;
-                    string notStarted = options.StartNvidia != null ? options.StartNvidia(out vibranceMayPass) : NvidiaDrs.Initialize(out vibranceMayPass);
+                    string notStarted = options.StartNvidia != null ? options.StartNvidia(out vibranceMayPass) : machine.StartNvidia(out vibranceMayPass);
                     if (notStarted != null)
                     {
                         report.Add(log, section, !isUndo && !vibranceMayPass ? Outcomes.Skipped : Outcomes.Deferred, notStarted);
                         return;
                     }
 
-                    IList<int[]> current = NvidiaDrs.ReadVibrance();
+                    IList<int[]> current = machine.ReadVibrance();
                     KvNode u = undo == null ? null : undo.Section(section);
                     List<int> wanted = new List<int>();
                     List<int> indexes = new List<int>();
@@ -3025,6 +3068,8 @@ namespace CS2OpenDev.ConfigManager.Kit
                             PassGate(report);
                         }
 
+                        report.Settings.Add(new SettingChange(section, "display " + Inv.S(index + 1) + " vibrance", Inv.S(current[index][0]), Inv.S(wanted[i])));
+
                         // On record before the level changes: the worker may be cut off at any point, so this order is
                         // what keeps a change from going unrecorded.
                         if (u != null)
@@ -3035,7 +3080,7 @@ namespace CS2OpenDev.ConfigManager.Kit
 
                         if (!dry)
                         {
-                            NvidiaDrs.SetVibrance(index, Math.Max(current[index][1], Math.Min(current[index][2], wanted[i])));
+                            machine.SetVibrance(index, Math.Max(current[index][1], Math.Min(current[index][2], wanted[i])));
                         }
 
                         n++;
@@ -3060,7 +3105,7 @@ namespace CS2OpenDev.ConfigManager.Kit
         ///     and writes them back as they are. Every entry is checked before the first is written.
         /// </summary>
         [System.Runtime.Versioning.SupportedOSPlatform("windows")]
-        private static int RestoreRegistry(KvNode node, string cs2Exe, UndoLog undoLog, string section, bool dry, bool isUndo)
+        private static int RestoreRegistry(IMachine machine, KvNode node, string cs2Exe, UndoLog undoLog, string section, bool dry, bool isUndo, RunReport report)
         {
             KvNode list = node.Child("registry");
             if (list == null)
@@ -3081,6 +3126,18 @@ namespace CS2OpenDev.ConfigManager.Kit
                 if (!isUndo && !named.Add(entry.Get("key") + "\\" + entry.Get("name")))
                 {
                     throw new FormatException("the backup names " + entry.Get("key") + "\\" + entry.Get("name") + " twice");
+                }
+            }
+
+            // A key this user may not write stops the part here, before any value is written, as a file does.
+            foreach (KvNode entry in list.Children)
+            {
+                string name = entry.Get("name");
+                string valueName = name == RegistryItem.Cs2ExeToken ? cs2Exe : name;
+                string blocked = valueName == null ? null : machine.RegistryWriteProblem(entry.Get("key"), valueName);
+                if (blocked != null)
+                {
+                    throw new TargetBlockedException(entry.Get("key") + "\\" + name + " cannot be written (" + blocked + "), so nothing in this part was written", null);
                 }
             }
 
@@ -3105,7 +3162,7 @@ namespace CS2OpenDev.ConfigManager.Kit
 
                 string oldKind;
                 string oldData;
-                bool had = WindowsSettings.ReadRegistry(subKey, valueName, out oldKind, out oldData);
+                bool had = machine.ReadRegistry(subKey, valueName, out oldKind, out oldData);
                 bool absent = entry.Get("absent") == "1";
                 string kind = absent ? null : entry.Get("kind");
                 string data = absent ? null : entry.Get("data");
@@ -3119,6 +3176,9 @@ namespace CS2OpenDev.ConfigManager.Kit
                 {
                     continue;
                 }
+
+                report.Settings.Add(new SettingChange(section, subKey + "\\" + (name == RegistryItem.Cs2ExeToken ? "cs2.exe" : name),
+                    had ? oldData : null, kind == null ? null : data));
 
                 if (undoList != null)
                 {
@@ -3140,7 +3200,7 @@ namespace CS2OpenDev.ConfigManager.Kit
 
                 if (!dry)
                 {
-                    WindowsSettings.WriteRegistry(subKey, valueName, kind, data);
+                    machine.WriteRegistry(subKey, valueName, kind, data);
                 }
 
                 n++;
@@ -3243,6 +3303,197 @@ namespace CS2OpenDev.ConfigManager.Kit
         public static bool IsCarriedRegistryValue(string subKey, string name)
         {
             return WindowsSettings.CarriedItem(subKey, name) != null;
+        }
+
+        /// <summary>
+        ///     Linux: the carried settings the player's NVIDIA application profiles give the cs2 process, as the driver
+        ///     resolves them. Read only; nothing in the player's files is changed.
+        /// </summary>
+        private static void CaptureLinuxNvidia(IMachine machine, KvNode manifest, RunReport report, TextWriter log)
+        {
+            string section = Sections.Nvidia;
+            string home = machine.HomeFolder();
+            if (string.IsNullOrEmpty(home))
+            {
+                report.Add(log, section, Outcomes.Skipped, "HOME is not set, so the NVIDIA application profiles were not looked for");
+                return;
+            }
+
+            List<string> notes = new List<string>();
+            List<NvProfileSetting> settings = NvidiaProfiles.Cs2Settings(home, notes);
+            string noted = notes.Count > 0 ? "; " + string.Join("; ", notes.ToArray()) : "";
+            if (settings.Count == 0)
+            {
+                report.Add(log, section, Outcomes.Skipped, "no NVIDIA application profile gives the cs2 process a carried setting" + noted);
+                return;
+            }
+
+            KvNode list = manifest.Section(section).Section("linux");
+            foreach (NvProfileSetting setting in settings)
+            {
+                KvNode item = list.Section(setting.Key);
+                item.Set("kind", setting.Kind);
+                item.Set("value", setting.Value);
+            }
+
+            report.Add(log, section, Outcomes.Done, Inv.S(settings.Count) + " settings for the cs2 process from the NVIDIA application profiles" + noted);
+        }
+
+        /// <summary>
+        ///     Linux: writes the backup's settings as one file of acb's own in ~/.nv/nvidia-application-profiles-rc.d,
+        ///     recorded first, so the player's own profile files are never edited and acb undo removes or restores just
+        ///     that file. The driver reads the user's rc file before the .d folder, so a rule for cs2 there wins, which
+        ///     the result says.
+        /// </summary>
+        private static void RestoreLinuxNvidia(IMachine machine, KvNode node, IBackupSource backup, bool isUndo, bool dry, UndoLog undoLog,
+            RunReport report, TextWriter log)
+        {
+            string section = Sections.Nvidia;
+            string home = machine.HomeFolder();
+            if (string.IsNullOrEmpty(home))
+            {
+                report.Add(log, section, Outcomes.Deferred, "HOME is not set, so the NVIDIA application profiles cannot be found; run this again with HOME set");
+                return;
+            }
+
+            string target = NvidiaProfiles.OwnFile(home);
+            byte[] bytes = null;
+            int count = 0;
+            if (isUndo)
+            {
+                KvNode files = node.Child("files");
+                string recorded = files == null ? null : files.Get(NvidiaProfiles.OwnFileName);
+                if (recorded == null)
+                {
+                    report.Add(log, section, Outcomes.Skipped, "the record holds nothing for the NVIDIA application profiles");
+                    return;
+                }
+
+                if (recorded != "absent")
+                {
+                    bytes = backup.ReadFile(section, NvidiaProfiles.OwnFileName);
+                    if (bytes == null || Sha256(bytes) != recorded)
+                    {
+                        throw new IOException("the record's copy of acb's NVIDIA profile file is missing or damaged, so it was not put back");
+                    }
+
+                    if (File.Exists(target) && Sha256(target) == recorded)
+                    {
+                        report.Add(log, section, Outcomes.Done, "acb's NVIDIA profile file is already as recorded");
+                        return;
+                    }
+                }
+                else if (!File.Exists(target))
+                {
+                    report.Add(log, section, Outcomes.Done, "acb's NVIDIA profile file is already gone");
+                    return;
+                }
+            }
+            else
+            {
+                KvNode list = node.Child("linux");
+                if (list == null || list.Children.Count == 0)
+                {
+                    report.Add(log, section, Outcomes.Skipped, "the backup holds no NVIDIA application profile settings");
+                    return;
+                }
+
+                List<NvProfileSetting> settings = new List<NvProfileSetting>();
+                HashSet<string> named = new HashSet<string>(StringComparer.Ordinal);
+                foreach (KvNode item in list.Children)
+                {
+                    string kind = item.Get("kind") ?? "";
+                    string value = item.Get("value") ?? "";
+                    string problem = NvidiaProfiles.SettingProblem(item.Key, kind, value);
+                    if (problem != null)
+                    {
+                        throw new FormatException(problem + ", so nothing in this part was written");
+                    }
+
+                    if (!named.Add(item.Key))
+                    {
+                        throw new FormatException("the backup names NVIDIA profile setting " + item.Key + " twice, so nothing in this part was written");
+                    }
+
+                    settings.Add(new NvProfileSetting(item.Key, kind, value));
+                }
+
+                bytes = NvidiaProfiles.Write(settings);
+                count = settings.Count;
+                Dictionary<string, string> now = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (NvProfileSetting setting in NvidiaProfiles.Cs2Settings(home, new List<string>()))
+                {
+                    now[setting.Key] = setting.Value;
+                }
+
+                foreach (NvProfileSetting setting in settings)
+                {
+                    string had;
+                    now.TryGetValue(setting.Key, out had);
+                    if (had != setting.Value)
+                    {
+                        report.Settings.Add(new SettingChange(section, setting.Key, had, setting.Value));
+                    }
+                }
+            }
+
+            string folder = NvidiaProfiles.UserRcD(home);
+            if (File.Exists(folder))
+            {
+                throw new TargetBlockedException(folder + " is a file, so acb cannot add its own profile file beside it; nothing in this part was written", null);
+            }
+
+            try
+            {
+                if (bytes == null)
+                {
+                    SafeFile.CheckDeletable(target);
+                }
+                else
+                {
+                    SafeFile.CheckWritable(target, dry);
+                }
+
+                report.Observed.Add(section + " " + target + " " + (File.Exists(target) ? Sha256(target) : "absent"));
+            }
+            catch (IOException ex)
+            {
+                throw new TargetBlockedException(NvidiaProfiles.OwnFileName + " cannot be written (" + ex.Message + "), so nothing in this part was written", ex);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                throw new TargetBlockedException(NvidiaProfiles.OwnFileName + " cannot be written (" + ex.Message + "), so nothing in this part was written", ex);
+            }
+
+            if (undoLog != null)
+            {
+                RecordFile(target, undoLog.Dir, section, NvidiaProfiles.OwnFileName, undoLog.Manifest.Section(section).Section("files"));
+                UndoLog.Save(undoLog);
+            }
+
+            if (!dry)
+            {
+                if (bytes == null)
+                {
+                    SafeFile.Delete(target);
+                }
+                else
+                {
+                    Directory.CreateDirectory(folder);
+                    SafeFile.Write(target, bytes);
+                }
+            }
+
+            if (isUndo)
+            {
+                report.Add(log, section, Outcomes.Done, bytes == null ? "removed acb's NVIDIA profile file" : "put back acb's NVIDIA profile file as it was");
+                return;
+            }
+
+            report.Add(log, section, Outcomes.Done, (dry ? "would write " : "wrote ") + Inv.S(count) + " settings for the cs2 process to " + target
+                + (NvidiaProfiles.RcHasCs2Rule(home)
+                    ? "; this PC's own nvidia-application-profiles-rc also gives cs2 settings, and the driver reads it first, so its values win where both set one"
+                    : ""));
         }
 
         private static void RecordFile(string target, string undoDir, string section, string relative, KvNode undoFiles)

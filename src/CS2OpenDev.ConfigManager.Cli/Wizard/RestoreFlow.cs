@@ -6,7 +6,8 @@ using CS2OpenDev.ConfigManager.Restoring;
 namespace CS2OpenDev.ConfigManager.Cli.Wizard;
 
 /// <summary>One section as the Review step shows it: what a restore would do there, and the files it would write.</summary>
-internal sealed record SectionReview(string Section, string Label, string Outcome, string Detail, IReadOnlyList<FileChange> Files);
+internal sealed record SectionReview(string Section, string Label, string Outcome, string Detail, IReadOnlyList<FileChange> Files,
+    IReadOnlyList<SettingChange> Settings);
 
 /// <summary>
 ///     The restore wizard's steps without the screen: Open, Check, Review, Choose, Pre-flight, Apply, Done. Every
@@ -124,7 +125,7 @@ internal sealed class RestoreFlow
 
             (string outcome, string detail) = Planned(session, section);
             sections.Add(new SectionReview(section, Sections.Label(section), outcome, Output.Printable(detail),
-                [.. files.Where(f => f.Section == section)]));
+                [.. files.Where(f => f.Section == section)], [.. (session.Preview?.Settings ?? []).Where(c => c.Section == section)]));
         }
 
         return sections;
@@ -155,6 +156,25 @@ internal sealed class RestoreFlow
         }
 
         lines.AddRange(TextDiff.Lines(here, backup).Select(l => Output.Printable(l)));
+        return lines;
+    }
+
+    /// <summary>A section's settings as a table a person reads: each one's value here and the value it gets.</summary>
+    public static IReadOnlyList<string> SettingLines(SectionReview section)
+    {
+        ArgumentNullException.ThrowIfNull(section);
+        if (section.Settings.Count == 0)
+        {
+            return [];
+        }
+
+        int width = Math.Min(40, section.Settings.Max(c => c.Name.Length));
+        List<string> lines = [$"{"Setting".PadRight(width)}  {"Here now",-20}  Gets"];
+        foreach (SettingChange change in section.Settings)
+        {
+            lines.Add(Output.Printable($"{change.Name.PadRight(width)}  {change.Current ?? "(not set)",-20}  {change.Wanted ?? "(not set)"}"));
+        }
+
         return lines;
     }
 

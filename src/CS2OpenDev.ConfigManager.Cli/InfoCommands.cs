@@ -162,7 +162,8 @@ internal static class InfoCommands
             SteamRoot = line.Value("steam-path"),
             AccountId = line.Value("account"),
             IncludeGameStateIntegration = line.Flag("gsi"),
-            Creator = "Advanced Config Backup (acb) " + Archives.Version()
+            Creator = "Advanced Config Backup (acb) " + Archives.Version(),
+            Machine = host.Machine
         };
         if (only is not null)
         {

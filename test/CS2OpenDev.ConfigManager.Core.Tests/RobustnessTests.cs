@@ -388,6 +388,7 @@ public class RobustnessTests
     ///     save, and while it is still stuck no second call starts. One test, since the worker is shared state.
     /// </summary>
     [Test]
+    [NotInParallel("nvidia-driver-worker")]
     public async Task ADriverCallThatHangs_FailsItsPart_AndBlocksASecondCallUntilItReturns()
     {
         using ManualResetEventSlim release = new();
@@ -443,6 +444,7 @@ public class RobustnessTests
     ///     covers what it changed.
     /// </summary>
     [Test]
+    [NotInParallel("nvidia-driver-worker")]
     public async Task ADriverWorkerGivenUpOn_ChangesNothingLate_UnlessItHadStarted()
     {
         DriverGate early = new();
