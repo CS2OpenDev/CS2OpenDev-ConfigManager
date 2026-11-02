@@ -4,13 +4,17 @@
 # nuget.org, so forks and outside contributors get a working build.
 #
 # Both platforms run the suites, publish acb Native AOT (a trim or AOT warning fails the build) and run the
-# published binary end to end (.github/scripts/acb-smoke.sh).
+# published binary end to end (.github/scripts/acb-smoke.sh). The system-test jobs then run it on throwaway
+# "player PCs"; test/system/README.md says what each one checks.
 name: ci
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * *'
 
 permissions:
   contents: read
@@ -83,3 +87,65 @@ jobs:
           exe=${{ runner.os == 'Windows' && 'acb.exe' || 'acb' }}
           bash .github/scripts/acb-smoke.sh "artifacts/publish/CS2OpenDev.ConfigManager.Cli/release_$rid/$exe"
 
+      - name: Keep the published acb for the system tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: acb-${{ runner.os == 'Windows' && 'win-x64' || 'linux-x64' }}
+          path: artifacts/publish/CS2OpenDev.ConfigManager.Cli/release_${{ runner.os == 'Windows' && 'win-x64' || 'linux-x64' }}/${{ runner.os == 'Windows' && 'acb.exe' || 'acb' }}
+          if-no-files-found: error
+
+  # A Linux player PC: a non-root user, Steam under ~/.local/share/Steam with ~/.steam/steam linked to it, the
+  # default undo store. test/system/linux/scenarios.sh says what it checks.
+  linux-pc:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: acb-linux-x64
+          path: context
+      - name: Run the Linux player PC
+        run: |
+          cp test/system/fixture/make-fake-steam.sh test/system/linux/scenarios.sh context/
+          docker build -t acb-linux-pc -f test/system/linux/Dockerfile context
+          docker run --rm acb-linux-pc
+
+  # A Windows player PC: Server Core, process isolation (the image's build matches windows-2025's), a standard user
+  # and ContainerAdministrator. test/system/windows/scenarios.ps1 says what it asserts and what it only reports.
+  windows-pc:
+    needs: build
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: acb-win-x64
+          path: context
+      - name: Run the Windows player PC
+        shell: pwsh
+        run: |
+          Copy-Item test/system/fixture/New-FakeSteam.ps1, test/system/windows/scenarios.ps1 context/
+          docker build -t acb-windows-pc -f test/system/windows/Dockerfile context
+          docker run --rm --isolation=process --user player acb-windows-pc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          docker run --rm --isolation=process acb-windows-pc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  # The runner VM itself: real registry, real powercfg. Disposable, so the machine-wide sections are restored and
+  # undone for real; slower and heavier than the containers, so not on every pull request.
+  windows-vm:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: windows-2025
+    env:
+      ACB_DISPOSABLE_MACHINE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: acb-win-x64
+          path: acb
+      - name: Restore and undo on the runner
+        shell: pwsh
+        run: ./test/system/windows-vm/scenarios.ps1 -Acb acb/acb.exe -Fixture test/system/fixture/New-FakeSteam.ps1
