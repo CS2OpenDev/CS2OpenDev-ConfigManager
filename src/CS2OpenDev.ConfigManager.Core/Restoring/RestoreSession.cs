@@ -5,7 +5,20 @@ using CS2OpenDev.ConfigManager.Kit;
 namespace CS2OpenDev.ConfigManager.Restoring;
 
 /// <summary>What to restore. <paramref name="Gsi" /> also writes the backup's gamestate_integration_*.cfg files.</summary>
-internal sealed record RestoreRequest(string Archive, IReadOnlyList<string>? Only, string? Account, string? SteamPath, string? Policy, bool Gsi);
+internal sealed record RestoreRequest(string Archive, IReadOnlyList<string>? Only, string? Account, string? SteamPath, string? Policy, bool Gsi)
+{
+    /// <summary>Asks for a sealed backup's passphrase; null when nobody can be asked.</summary>
+    public PassphrasePrompt? Passphrase { get; init; }
+
+    /// <summary>A sealed backup's key, handed on by the run that opened it (the administrator's run).</summary>
+    public byte[]? SealKey { get; init; }
+}
+
+/// <summary>
+///     Asks for a sealed backup's passphrase; <paramref name="again" /> is true after one that did not open it.
+///     Returns null when there is none to give.
+/// </summary>
+internal delegate string? PassphrasePrompt(bool again);
 
 /// <summary>What a restore reaches on the PC, apart from the files and settings the engine writes.</summary>
 internal sealed class RestoreEnvironment
@@ -146,8 +159,8 @@ internal sealed class RestoreSession
         TrustLevel minimum = policy?.MinimumLevel ?? TrustLevel.Hash;
         string? problem;
         VerifiedArchive archive = (archiveBytes is null
-                                      ? OpenArchive(request.Archive, environment.Platform, minimum, out problem)
-                                      : OpenArchive(archiveBytes, environment.Platform, minimum, out problem))
+                                      ? OpenArchive(request.Archive, environment.Platform, minimum, out problem, request.Passphrase, request.SealKey)
+                                      : OpenArchive(archiveBytes, environment.Platform, minimum, out problem, request.Passphrase, request.SealKey))
                                   ?? throw new RestoreRefusedException(problem!);
         if (policy?.ArchiveProblem(archive) is { } policyRefusal)
         {
@@ -478,11 +491,17 @@ internal sealed class RestoreSession
         return Dsse.Sha256Hex(Encoding.UTF8.GetBytes(text.ToString()));
     }
 
+    /// <summary>How many passphrases a sealed backup is tried with before it is refused.</summary>
+    public const int PassphraseTries = 3;
+
     /// <summary>
     ///     Opens and verifies a v2 archive; null with <paramref name="problem" /> set when it is refused. A folder is
     ///     not an archive: v1's unzipped backups ran their own scripts, and acb reads only what ArchiveReader checks.
+    ///     A sealed archive is opened with <paramref name="sealKey" /> when one is handed on, or else with what
+    ///     <paramref name="ask" /> gives, asking again (up to <see cref="PassphraseTries" /> times) after one that does not open it.
     /// </summary>
-    public static VerifiedArchive? OpenArchive(string path, string? requirePlatform, TrustLevel minimumLevel, out string? problem)
+    public static VerifiedArchive? OpenArchive(string path, string? requirePlatform, TrustLevel minimumLevel, out string? problem,
+        PassphrasePrompt? ask = null, byte[]? sealKey = null)
     {
         ArgumentNullException.ThrowIfNull(path);
         problem = null;
@@ -494,11 +513,7 @@ internal sealed class RestoreSession
 
         try
         {
-            return ArchiveReader.Open(path, new ArchiveReadOptions { RequirePlatform = requirePlatform, MinimumLevel = minimumLevel });
-        }
-        catch (ArchiveRejectedException ex)
-        {
-            problem = ex.Message;
+            return Unlock(options => ArchiveReader.Open(path, options), requirePlatform, minimumLevel, ask, sealKey, out problem);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -508,21 +523,46 @@ internal sealed class RestoreSession
         return null;
     }
 
-    /// <summary>As <see cref="OpenArchive(string, string?, TrustLevel, out string?)" />, from a zip's bytes rather than a path.</summary>
-    public static VerifiedArchive? OpenArchive(byte[] zip, string? requirePlatform, TrustLevel minimumLevel, out string? problem)
-    {
-        problem = null;
-        try
+    /// <summary>As <see cref="OpenArchive(string, string?, TrustLevel, out string?, PassphrasePrompt, byte[])" />, from a zip's bytes rather than a path.</summary>
+    public static VerifiedArchive? OpenArchive(byte[] zip, string? requirePlatform, TrustLevel minimumLevel, out string? problem,
+        PassphrasePrompt? ask = null, byte[]? sealKey = null) =>
+        Unlock(options =>
         {
             using MemoryStream stream = new(zip, writable: false);
-            return ArchiveReader.Open(stream, new ArchiveReadOptions { RequirePlatform = requirePlatform, MinimumLevel = minimumLevel });
-        }
-        catch (ArchiveRejectedException ex)
-        {
-            problem = ex.Message;
-        }
+            return ArchiveReader.Open(stream, options);
+        }, requirePlatform, minimumLevel, ask, sealKey, out problem);
 
-        return null;
+    private static VerifiedArchive? Unlock(Func<ArchiveReadOptions, VerifiedArchive> open, string? requirePlatform, TrustLevel minimumLevel,
+        PassphrasePrompt? ask, byte[]? sealKey, out string? problem)
+    {
+        problem = null;
+        ArchiveReadOptions options = new() { RequirePlatform = requirePlatform, MinimumLevel = minimumLevel, SealKey = sealKey };
+        for (int tries = 0; ; tries++)
+        {
+            SealNotOpenedException notOpened;
+            try
+            {
+                return open(options);
+            }
+            catch (SealNotOpenedException ex)
+            {
+                notOpened = ex;
+            }
+            catch (ArchiveRejectedException ex)
+            {
+                problem = ex.Message;
+                return null;
+            }
+
+            if (sealKey is null && tries < PassphraseTries && ask?.Invoke(notOpened.Wrong) is { } passphrase)
+            {
+                options = options with { Passphrase = passphrase };
+                continue;
+            }
+
+            problem = notOpened.Message + (!notOpened.Wrong && ask is null ? " acb asks for it at a terminal, or reads it from --passphrase-file." : "");
+            return null;
+        }
     }
 
     /// <summary>A policy from its bytes; null with <paramref name="problem" /> set when it is refused.</summary>

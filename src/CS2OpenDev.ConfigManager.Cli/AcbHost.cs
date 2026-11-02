@@ -19,6 +19,12 @@ internal sealed class AcbHost
     /// <summary>A line from the person, or null when there is nobody to ask (input ended or redirected).</summary>
     public required Func<string?> ReadLine { get; init; }
 
+    /// <summary>
+    ///     Asks for a passphrase without showing it, the question going to standard error; null when there is nobody
+    ///     to ask or the input ended.
+    /// </summary>
+    public Func<string, string?> ReadSecret { get; init; } = _ => null;
+
     /// <summary>A person is at a terminal to answer questions; false makes every question take its safe default.</summary>
     public required bool Interactive { get; init; }
 
@@ -74,6 +80,7 @@ internal sealed class AcbHost
         Out = Console.Out,
         Err = Console.Error,
         ReadLine = Console.ReadLine,
+        ReadSecret = ReadHidden,
         Interactive = !Console.IsInputRedirected && !Console.IsOutputRedirected,
         Platform = ArchiveFormat.CurrentPlatform,
         UserStoreRoot = UndoStore.UserRoot(),
@@ -120,6 +127,57 @@ internal sealed class AcbHost
         StartNvidia = StartNvidia,
         DriverTimeoutMs = DriverTimeoutMs
     };
+
+    /// <summary>Reads a line from the console without echoing it. Escape or Ctrl+C gives null, as an empty answer does.</summary>
+    private static string? ReadHidden(string question)
+    {
+        if (Console.IsInputRedirected)
+        {
+            return null;
+        }
+
+        Console.Error.Write(question);
+        System.Text.StringBuilder text = new();
+        bool treatControlC = Console.TreatControlCAsInput;
+        Console.TreatControlCAsInput = true;
+        try
+        {
+            while (true)
+            {
+                ConsoleKeyInfo key = Console.ReadKey(intercept: true);
+                switch (key.Key)
+                {
+                    case ConsoleKey.Enter:
+                        return text.Length == 0 ? null : text.ToString();
+                    case ConsoleKey.Escape:
+                        return null;
+                    case ConsoleKey.C when (key.Modifiers & ConsoleModifiers.Control) != 0:
+                        return null;
+                    case ConsoleKey.Backspace:
+                        if (text.Length > 0)
+                        {
+                            // A character outside the Basic Multilingual Plane is two UTF-16 units; remove both.
+                            int cut = text.Length >= 2 && char.IsLowSurrogate(text[^1]) && char.IsHighSurrogate(text[^2]) ? 2 : 1;
+                            text.Length -= cut;
+                        }
+
+                        break;
+                    default:
+                        if (key.KeyChar != '\0' && !char.IsControl(key.KeyChar))
+                        {
+                            text.Append(key.KeyChar);
+                        }
+
+                        break;
+                }
+            }
+        }
+        finally
+        {
+            Console.TreatControlCAsInput = treatControlC;
+            Console.Error.WriteLine();
+        }
+    }
 
     /// <summary>Asks a yes-or-no question whose default is no; anything but y or yes, or nobody to answer, is no.</summary>
     public bool Confirm(string question)

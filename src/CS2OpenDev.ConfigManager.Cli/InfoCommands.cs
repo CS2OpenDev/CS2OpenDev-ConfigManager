@@ -10,7 +10,7 @@ internal static class InfoCommands
     /// <summary>Checks an archive and says what it is. Any platform: checking a backup is not restoring it.</summary>
     public static int Verify(IReadOnlyList<string> args, AcbHost host)
     {
-        CommandLine line = CommandLine.Parse(args, "verify", ["json"], ["policy", "report"]);
+        CommandLine line = CommandLine.Parse(args, "verify", ["json"], ["policy", "report", "passphrase-file"]);
         Output output = new(host, "verify", line.Flag("json"), line.Value("report"));
         string path = line.Single("a backup file");
         OrganiserPolicy? policy = Archives.Policy(line.Value("policy"), out string? policyProblem);
@@ -19,7 +19,7 @@ internal static class InfoCommands
             return output.Refuse(policyProblem);
         }
 
-        VerifiedArchive? archive = Archives.Open(path, null, policy?.MinimumLevel ?? TrustLevel.Hash, out string? problem);
+        VerifiedArchive? archive = Archives.Open(path, null, policy?.MinimumLevel ?? TrustLevel.Hash, out string? problem, Archives.Passphrase(line, host));
         if (archive is null)
         {
             return output.Refuse(problem!);
@@ -41,9 +41,13 @@ internal static class InfoCommands
 
         output.Line();
         // A hash-level backup proves only that its files match its manifest: anyone can rewrite both.
-        string state = archive.Level == TrustLevel.Hash
-            ? "Its files match its manifest, so nothing was damaged or changed by accident. It is unsigned: anyone could have edited it, the account named above included."
-            : "Unchanged since it was made.";
+        string state = archive.Level switch
+        {
+            TrustLevel.Hash => "Its files match its manifest, so nothing was damaged or changed by accident. It is unsigned: anyone could have edited it, the account named above included.",
+            TrustLevel.Seal => "The passphrase opens its seal, so it was made by someone who knows the passphrase and is unchanged since. "
+                               + "Anyone who knows or guesses the passphrase could have made it, the account named above included.",
+            _ => "Unchanged since it was made."
+        };
         output.Note(archive.Manifest.Platform == host.Platform
             ? $"{state} acb restores it on this PC."
             : $"{state} It restores only on {archive.Manifest.Platform}, and this PC is {host.Platform ?? "neither Windows x64 nor Linux x64"}.");
@@ -53,10 +57,10 @@ internal static class InfoCommands
     /// <summary>Lists what an archive holds, or prints one section's capture record or one file, after checking it.</summary>
     public static int Show(IReadOnlyList<string> args, AcbHost host)
     {
-        CommandLine line = CommandLine.Parse(args, "show", ["json"], ["section", "file", "report"]);
+        CommandLine line = CommandLine.Parse(args, "show", ["json"], ["section", "file", "report", "passphrase-file"]);
         Output output = new(host, "show", line.Flag("json"), line.Value("report"));
         string path = line.Single("a backup file");
-        VerifiedArchive? archive = Archives.Open(path, null, TrustLevel.Hash, out string? problem);
+        VerifiedArchive? archive = Archives.Open(path, null, TrustLevel.Hash, out string? problem, Archives.Passphrase(line, host));
         if (archive is null)
         {
             return output.Refuse(problem!);
@@ -122,6 +126,40 @@ internal static class InfoCommands
         return output.Finish(ExitCodes.Done);
     }
 
+    /// <summary>
+    ///     Asks for a new passphrase twice, at a terminal only. Enter alone offers a generated phrase of six words,
+    ///     shown once for the person to write down. Null when nobody can be asked or the person gave none.
+    /// </summary>
+    private static string? AskNewPassphrase(AcbHost host, Output output)
+    {
+        if (!host.Interactive)
+        {
+            return null;
+        }
+
+        output.Line($"A seal needs a passphrase of at least {Seal.MinimumLength} characters. Anyone holding the backup can try passphrases");
+        output.Line("against it, so a long one matters; Enter alone makes one of six random words.");
+        string? passphrase = host.ReadSecret("Passphrase: ");
+        if (passphrase is null)
+        {
+            string generated = Seal.GeneratePhrase();
+            output.Line();
+            output.Line("Your passphrase (write it down; it is not kept anywhere and is shown only now):");
+            output.Line();
+            output.Line("    " + generated);
+            output.Line();
+            return host.Confirm("Seal the backup with it?") ? generated : null;
+        }
+
+        if (Seal.PassphraseProblem(passphrase) is null && host.ReadSecret("Again, to be sure: ") != passphrase)
+        {
+            output.Note("The two passphrases differ.");
+            return null;
+        }
+
+        return passphrase;
+    }
+
     private static string Describe(KvNode node)
     {
         int values = 0;
@@ -147,14 +185,49 @@ internal static class InfoCommands
     /// <summary>Makes a v2 archive of this PC's settings, as the DemoViewer.NET plugin does. Read only, apart from the archive.</summary>
     public static int Backup(IReadOnlyList<string> args, AcbHost host)
     {
-        CommandLine line = CommandLine.Parse(args, "backup", ["gsi", "json"], ["output", "only", "account", "steam-path", "report"]);
+        CommandLine line = CommandLine.Parse(args, "backup", ["gsi", "json", "seal"], ["output", "only", "account", "steam-path", "report", "passphrase-file"]);
         line.NoPositionals();
         Output output = new(host, "backup", line.Flag("json"), line.Value("report"));
         string zip = line.Value("output") ?? throw new UsageException("acb backup needs -o <file> for the backup it writes.");
         List<string>? only = Archives.Sections(line.List("only"));
+        if (line.Value("passphrase-file") is not null && !line.Flag("seal"))
+        {
+            throw new UsageException("--passphrase-file seals the backup only with --seal.");
+        }
+
         if (host.Platform is null)
         {
             return output.Refuse("backups are made on Windows x64 and Linux x64 only.");
+        }
+
+        if (File.Exists(zip))
+        {
+            return output.Refuse($"{zip} already exists; a backup never replaces a file.");
+        }
+
+        SealKey? seal = null;
+        if (line.Flag("seal"))
+        {
+            string? passphrase = line.Value("passphrase-file") is { } file ? Archives.PassphraseFile(file, host) : AskNewPassphrase(host, output);
+            if (passphrase is null)
+            {
+                return output.Refuse(host.Interactive
+                    ? "no passphrase was given, so no backup was written."
+                    : "--seal needs a passphrase: run at a terminal to be asked for one, or give --passphrase-file.");
+            }
+
+            if (Seal.PassphraseProblem(passphrase) is { } weak)
+            {
+                return output.Refuse(weak + ", so no backup was written.");
+            }
+
+            if (Seal.MayBeTypedDifferently(passphrase))
+            {
+                output.Note("The passphrase holds characters beyond plain ASCII letters, digits and punctuation. Some keyboards and systems type an "
+                            + "accented letter another way, and a passphrase typed another way does not open the seal, so check it opens before you rely on it.");
+            }
+
+            seal = SealKey.Create(passphrase);
         }
 
         CaptureOptions options = new()
@@ -171,15 +244,10 @@ internal static class InfoCommands
             options.Include.AddRange(only);
         }
 
-        if (File.Exists(zip))
-        {
-            return output.Refuse($"{zip} already exists; a backup never replaces a file.");
-        }
-
         RunReport report;
         try
         {
-            report = BackupBuilder.Create(options, zip, new ArchiveTool("Advanced Config Backup (acb)", Archives.Version()), host.Now(), CancellationToken.None);
+            report = BackupBuilder.Create(options, zip, new ArchiveTool("Advanced Config Backup (acb)", Archives.Version()), host.Now(), CancellationToken.None, seal);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -199,7 +267,13 @@ internal static class InfoCommands
         }
 
         output.Report.Archive = Path.GetFullPath(zip);
+        output.Report.Level = ArchiveReader.Name(seal is null ? TrustLevel.Hash : TrustLevel.Seal);
         output.Note("Saved " + output.Report.Archive + (report.Count(Outcomes.Failed) > 0 ? ", without the parts that failed above." : "."));
+        if (seal is not null)
+        {
+            output.Note("It is sealed: acb asks for the passphrase before it checks or restores it. Without the passphrase it cannot be opened.");
+        }
+
         return output.Finish(report.Count(Outcomes.Failed) > 0 ? ExitCodes.PartsLeft : ExitCodes.Done);
     }
 }

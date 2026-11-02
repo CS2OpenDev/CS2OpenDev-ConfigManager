@@ -375,7 +375,7 @@ public class FailurePolicyTests
     // -- Helpers ------------------------------------------------------------------------------------------
 
     /// <summary>A hand-made archive with the player's cfg and the NVIDIA section, which only an administrator applies.</summary>
-    internal static string NvidiaArchive(TempDir temp)
+    internal static string NvidiaArchive(TempDir temp, SealKey? seal = null)
     {
         const string autoexec = "echo autoexec";
         return TestArchives.Craft(temp, $$"""
@@ -406,7 +406,7 @@ public class FailurePolicyTests
             		}
             	}
             }
-            """, new Dictionary<string, string> { ["files/cs2game/autoexec.cfg"] = autoexec });
+            """, new Dictionary<string, string> { ["files/cs2game/autoexec.cfg"] = autoexec }, seal: seal);
     }
 
     /// <summary>

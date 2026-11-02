@@ -17,11 +17,13 @@ public static class ArchiveWriter
 {
     /// <summary>
     ///     Zips every file under <paramref name="stagingDir" /> with a manifest naming each one, a README, and a
-    ///     DSSE envelope at the <see cref="TrustLevel.Hash" /> level. The zip is written beside
+    ///     DSSE envelope: at the <see cref="TrustLevel.Seal" /> level, signed with <paramref name="seal" />, when
+    ///     given one, and at the <see cref="TrustLevel.Hash" /> level otherwise. The zip is written beside
     ///     <paramref name="zipPath" /> and moved into place only when complete; an existing file there is never
     ///     replaced.
     /// </summary>
-    public static ArchiveManifest Write(string stagingDir, string zipPath, ArchiveContent content, DateTimeOffset created, CancellationToken ct)
+    public static ArchiveManifest Write(string stagingDir, string zipPath, ArchiveContent content, DateTimeOffset created, CancellationToken ct,
+        SealKey? seal = null)
     {
         if (!Platforms.IsKnown(content.Platform))
         {
@@ -67,7 +69,7 @@ public static class ArchiveWriter
         ArchiveManifest manifest = new(ArchiveFormat.Format, content.Platform, created.ToUniversalTime(), content.Tool,
             content.SteamAccount, content.Sections, entries);
         byte[] manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifest, ArchiveJson.Strict.ArchiveManifest);
-        byte[] envelopeBytes = HashEnvelope(manifestBytes);
+        byte[] envelopeBytes = Envelope(manifestBytes, seal);
 
         string partial = zipPath + ".partial";
         File.Delete(partial);
@@ -120,13 +122,16 @@ public static class ArchiveWriter
         }
     }
 
-    private static byte[] HashEnvelope(byte[] manifestBytes)
+    private static byte[] Envelope(byte[] manifestBytes, SealKey? seal)
     {
         Statement statement = new(ArchiveFormat.StatementType,
             [new StatementSubject(ArchiveFormat.ManifestEntry, new DigestSet(Dsse.Sha256Hex(manifestBytes)))],
-            ArchiveFormat.PredicateType, new TrustPredicate("hash"));
+            ArchiveFormat.PredicateType, seal is null ? new TrustPredicate("hash") : new TrustPredicate("seal", seal.Kdf));
         byte[] payload = JsonSerializer.SerializeToUtf8Bytes(statement, ArchiveJson.Strict.Statement);
-        DsseEnvelope envelope = new(ArchiveFormat.PayloadType, Convert.ToBase64String(payload), []);
+        DsseSignature[] signatures = seal is null
+            ? []
+            : [new DsseSignature(Seal.KeyId, Convert.ToBase64String(seal.Sign(Dsse.PreAuthEncoding(ArchiveFormat.PayloadType, payload))))];
+        DsseEnvelope envelope = new(ArchiveFormat.PayloadType, Convert.ToBase64String(payload), signatures);
         return JsonSerializer.SerializeToUtf8Bytes(envelope, ArchiveJson.Strict.DsseEnvelope);
     }
 

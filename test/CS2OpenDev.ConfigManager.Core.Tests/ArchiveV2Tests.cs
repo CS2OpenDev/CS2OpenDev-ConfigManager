@@ -212,7 +212,7 @@ public class ArchiveV2Tests
     }
 
     [Test]
-    [Arguments("seal", "cannot check yet")]
+    [Arguments("seal", "names no key settings")]
     [Arguments("identity", "cannot check yet")]
     [Arguments("trust-me", "does not know")]
     public async Task ALevelThisVersionCannotCheck_IsRefused(string level, string expected)
@@ -314,12 +314,12 @@ public class ArchiveV2Tests
         }
     }
 
-    private static readonly ArchiveReadOptions AnyPlatform = new() { RequirePlatform = null };
+    internal static readonly ArchiveReadOptions AnyPlatform = new() { RequirePlatform = null };
 
     private static async Task Refused(string zip, string expected) =>
         await Assert.That(() => ArchiveReader.Open(zip, AnyPlatform)).Throws<ArchiveRejectedException>().WithMessageContaining(expected);
 
-    private static string Write(TempDir temp, string? zip = null)
+    internal static string Write(TempDir temp, string? zip = null, SealKey? seal = null)
     {
         string staging = temp.Sub("staging");
         if (!Directory.Exists(staging))
@@ -333,11 +333,11 @@ public class ArchiveV2Tests
         zip ??= temp.Sub("backup.zip");
         ArchiveContent content = new(Platforms.WindowsX64, new ArchiveTool("Advanced Config Backup", "test"), "69413322",
             [new ArchiveSection("cs2", "Settings for account 69413322's CS2 'slot 0'")], "Advanced Config Backup\n");
-        ArchiveWriter.Write(staging, zip, content, Created, CancellationToken.None);
+        ArchiveWriter.Write(staging, zip, content, Created, CancellationToken.None, seal);
         return zip;
     }
 
-    private static byte[] Entry(string zip, string name)
+    internal static byte[] Entry(string zip, string name)
     {
         using ZipArchive archive = ZipFile.OpenRead(zip);
         using Stream stream = archive.GetEntry(name)!.Open();
@@ -349,7 +349,7 @@ public class ArchiveV2Tests
     private static int _rewrites;
 
     /// <summary>A copy of <paramref name="zip" /> with one entry changed or removed (null), and optionally one added.</summary>
-    private static string Rewrite(string zip, TempDir temp, string? name = null, Func<byte[], byte[]?>? change = null, (string Name, byte[] Bytes)? add = null)
+    internal static string Rewrite(string zip, TempDir temp, string? name = null, Func<byte[], byte[]?>? change = null, (string Name, byte[] Bytes)? add = null)
     {
         string copy = temp.Sub($"rewritten-{Interlocked.Increment(ref _rewrites)}.zip");
         using (ZipArchive source = ZipFile.OpenRead(zip))

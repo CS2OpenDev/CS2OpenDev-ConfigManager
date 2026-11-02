@@ -98,7 +98,22 @@ expect 0 restore "$work/backup.zip" --yes
 expect 0 undo --yes
 ok "a store left open to others is closed (0700) before a record goes in"
 
-# 6. Flatpak's root, with the native ones gone.
+# 6. A sealed backup: refused without its passphrase or with another, restored with it, the seal level recorded.
+printf 'correct horse battery staple\n' > "$work/passphrase"
+printf 'not the passphrase at all\n' > "$work/wrong"
+expect 0 backup -o "$work/sealed.zip" --only cs2game --steam-path "$work/source" --seal --passphrase-file "$work/passphrase"
+expect 1 verify "$work/sealed.zip"
+grep -q "sealed with a passphrase" "$work/out.txt" || fail "verify without the passphrase did not say the backup is sealed"
+expect 1 restore "$work/sealed.zip" --yes --passphrase-file "$work/wrong"
+holds "$autoexec" "echo target"
+expect 0 restore "$work/sealed.zip" --yes --passphrase-file "$work/passphrase"
+holds "$autoexec" "echo source"
+grep -rq '"archive.level"[[:space:]]*"seal"' "$store" || fail "the undo record does not name the seal level"
+expect 0 undo --yes
+holds "$autoexec" "echo target"
+ok "sealed backup: refused without or with the wrong passphrase, restored with it, undone"
+
+# 7. Flatpak's root, with the native ones gone.
 rm -rf "$steam" "$HOME/.steam"
 flat="$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam"
 bash "$fixture" "$flat" 69413322 "echo flatpak" "-target" > /dev/null

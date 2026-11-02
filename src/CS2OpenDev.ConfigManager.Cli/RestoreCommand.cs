@@ -15,7 +15,7 @@ internal static class RestoreCommand
 {
     private static readonly string[] PlanFlags = ["json", "gsi"];
     private static readonly string[] RestoreFlags = ["json", "gsi", "yes", "elevate"];
-    private static readonly string[] PlanValued = ["only", "account", "steam-path", "policy", "report"];
+    private static readonly string[] PlanValued = ["only", "account", "steam-path", "policy", "report", "passphrase-file"];
     private static readonly string[] RestoreValued = [.. PlanValued, "plan"];
 
     /// <summary>
@@ -81,6 +81,7 @@ internal static class RestoreCommand
                 line.Value("steam-path") is { } steam ? Path.GetFullPath(steam) : null, pinnedPolicy, line.Flag("gsi"));
         }
 
+        request = request with { Passphrase = Archives.Passphrase(line, host) };
         ElevationState elevation = host.Elevation();
         RestoreSession? session = Open(request, host, elevation, output, out int refusedWith);
         if (session is null)
@@ -336,12 +337,13 @@ internal static class RestoreCommand
             throw new UsageException("--policy and --policy-sha256 go together.");
         }
 
-        if (input is not [{ } archiveBytes, var policyBytes] || (policyPath is null) != (policyBytes is null))
+        if (input is not [{ } archiveBytes, var policyBytes, var sealKey] || (policyPath is null) != (policyBytes is null))
         {
             return output.Refuse("the run that started this one sent no backup, so nothing was changed. The administrator's part reads a backup only from that run, never from a path.");
         }
 
-        RestoreRequest request = new(line.Single("the backup's path, as the first run showed it"), only, null, null, policyPath, Gsi: false);
+        // A sealed backup is opened with the key the first run's passphrase made; nobody is asked here.
+        RestoreRequest request = new(line.Single("the backup's path, as the first run showed it"), only, null, null, policyPath, Gsi: false) { SealKey = sealKey };
         RestoreSession? session = Open(request, host, elevation, output, out int refusedWith, archiveBytes, policyBytes);
         if (session is null)
         {
@@ -491,7 +493,8 @@ internal static class RestoreCommand
             arguments.AddRange(["--policy", session.Request.Policy!, "--policy-sha256", policy.Sha256]);
         }
 
-        return host.Elevator.Run(arguments, [archiveBytes, policyBytes]);
+        byte[]? sealKey = session.Archive.SealKey?.Bytes.ToArray();
+        return host.Elevator.Run(arguments, [archiveBytes, policyBytes, sealKey]);
     }
 
     /// <summary>

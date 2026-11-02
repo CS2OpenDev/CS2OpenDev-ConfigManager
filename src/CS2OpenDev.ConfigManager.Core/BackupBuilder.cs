@@ -17,9 +17,10 @@ public static class BackupBuilder
     /// <summary>
     ///     Captures into a private temp folder, then writes <paramref name="zipPath" /> from only what the capture
     ///     record lists, so the copies of a part that failed never reach the archive. No archive is written when no
-    ///     part was captured; the report says why.
+    ///     part was captured; the report says why. With <paramref name="seal" /> the archive is sealed with it.
     /// </summary>
-    public static RunReport Create(CaptureOptions options, string zipPath, ArchiveTool tool, DateTimeOffset now, CancellationToken ct)
+    public static RunReport Create(CaptureOptions options, string zipPath, ArchiveTool tool, DateTimeOffset now, CancellationToken ct,
+        SealKey? seal = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         string platform = ArchiveFormat.CurrentPlatform
@@ -61,7 +62,7 @@ public static class BackupBuilder
             List<ArchiveSection> sections = [.. report.Results.Where(r => r.Outcome == "done")
                 .Select(r => new ArchiveSection(r.Section, Sections.Label(r.Section), string.IsNullOrEmpty(r.Detail) ? null : [r.Detail]))];
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(zipPath))!);
-            ArchiveWriter.Write(pack, zipPath, new ArchiveContent(platform, tool, account, sections, Readme(platform)), now, ct);
+            ArchiveWriter.Write(pack, zipPath, new ArchiveContent(platform, tool, account, sections, Readme(platform, seal is not null)), now, ct, seal);
             return report;
         }
         finally
@@ -70,7 +71,7 @@ public static class BackupBuilder
         }
     }
 
-    internal static string Readme(string platform) =>
+    internal static string Readme(string platform, bool sealedWithPassphrase = false) =>
         $"""
          Advanced Config Backup
          ======================
@@ -81,7 +82,7 @@ public static class BackupBuilder
          SHA-256, and signature.dsse.json names manifest.json's own SHA-256. If any file is changed, added or
          removed, the restorer refuses the whole backup: make a new one instead of editing this one. An
          unsigned (hash level) backup shows only that nothing was damaged or changed by accident: anyone
-         could have edited it and rewritten its manifest.
+         could have edited it and rewritten its manifest.{(sealedWithPassphrase ? SealReadme : "")}
 
          To check or restore it, use the restorer, acb:
 
@@ -95,6 +96,14 @@ public static class BackupBuilder
          as well, so the plan shows them as written; a restore --plan needs the same --gsi as its plan.
 
          It restores only on {platform}.
+         """;
+
+    private const string SealReadme = """
+
+
+         This backup is sealed with a passphrase: acb asks for it, and only that passphrase opens the seal, so a
+         backup that opens was made by someone who knew it and is unchanged since. Anyone holding this file can
+         try passphrases, though, and a guessed one could seal a changed copy, so keep the passphrase long.
          """;
 
     private static void DeleteQuietly(string dir)

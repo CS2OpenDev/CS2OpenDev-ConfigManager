@@ -40,6 +40,12 @@ internal sealed class RestoreFlow
     /// <summary>The Steam folder, or empty to find it.</summary>
     public string SteamPath { get; set; } = "";
 
+    /// <summary>A sealed backup's passphrase, or empty; unused for any other backup.</summary>
+    public string Passphrase { get; set; } = "";
+
+    /// <summary>The key the passphrase made for the backup last opened, so opening it again does not derive it again.</summary>
+    private (string Archive, string Passphrase, byte[] Key)? _sealKey;
+
     // Check
 
     public RestoreSession? Session { get; private set; }
@@ -365,20 +371,32 @@ internal sealed class RestoreFlow
             return false;
         }
 
+        string passphrase = Passphrase;
+        byte[]? key = _sealKey is { } known && known.Archive == ArchivePath && known.Passphrase == passphrase ? known.Key : null;
         RestoreRequest request = new(ArchivePath, null, _account, SteamPath.Length == 0 ? null : Path.GetFullPath(SteamPath),
-            PolicyPath.Length == 0 ? null : Path.GetFullPath(PolicyPath), Gsi);
+            PolicyPath.Length == 0 ? null : Path.GetFullPath(PolicyPath), Gsi)
+        {
+            // Asked once: the wizard has no prompt of its own, so a passphrase that does not open the seal is said
+            // on Check, and the person types another on Open.
+            Passphrase = again => again || passphrase.Length == 0 ? null : passphrase,
+            SealKey = key
+        };
         try
         {
             Session = RestoreSession.Open(request, RestoreCommand.Environment(_host, Elevation));
         }
         catch (RestoreRefusedException ex)
         {
+            _sealKey = null;
             Archive = ex.Archive;
-            Refusal = ex.Message;
+            Refusal = ex.Message == SealNotOpenedException.NeededMessage
+                ? ex.Message + " Type it on Open, under Passphrase."
+                : ex.Message;
             return false;
         }
 
         Archive = Session.Archive;
+        _sealKey = Archive.SealKey is { } opened ? (ArchivePath, passphrase, opened.Bytes.ToArray()) : null;
         Choosable = Session.Restorable;
 
         Session.Choose([.. Session.Restorable.Where(s => !_unchosen.Contains(s))]);

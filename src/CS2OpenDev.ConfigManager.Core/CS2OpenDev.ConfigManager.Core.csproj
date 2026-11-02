@@ -9,6 +9,12 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <PackageReference Include="Konscious.Security.Cryptography.Argon2"/>
+        <!-- The words a generated seal passphrase is made of (EFF, CC BY 3.0 US; see THIRD-PARTY-NOTICES.md). -->
+        <EmbeddedResource Include="Archive/eff-large-wordlist.txt" LogicalName="CS2OpenDev.ConfigManager.Archive.eff-large-wordlist.txt"/>
+    </ItemGroup>
+
+    <ItemGroup>
         <InternalsVisibleTo Include="CS2OpenDev.ConfigManager.Core.Tests"/>
         <InternalsVisibleTo Include="acb"/>
         <InternalsVisibleTo Include="CS2OpenDev.ConfigManager.Cli.Tests"/>

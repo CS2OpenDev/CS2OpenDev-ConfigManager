@@ -4,7 +4,21 @@ using System.Text.Json;
 namespace CS2OpenDev.ConfigManager.Archive;
 
 /// <summary>Why an archive was refused. <see cref="Exception.Message" /> is written for the person restoring.</summary>
-public sealed class ArchiveRejectedException(string message) : Exception(message);
+public class ArchiveRejectedException(string message) : Exception(message);
+
+/// <summary>
+///     A sealed archive that was not opened: no passphrase was given (<see cref="Wrong" /> false), or the one given
+///     does not open it (true), which is also what an archive changed after it was sealed looks like.
+/// </summary>
+public sealed class SealNotOpenedException(string message, bool wrong) : ArchiveRejectedException(message)
+{
+    public const string NeededMessage = "This backup is sealed with a passphrase, and none was given.";
+
+    public const string WrongMessage =
+        "The passphrase does not open this backup's seal: it is not the one the backup was sealed with, or the backup was changed after it was sealed.";
+
+    public bool Wrong { get; } = wrong;
+}
 
 public sealed record ArchiveReadOptions
 {
@@ -12,6 +26,12 @@ public sealed record ArchiveReadOptions
     public string? RequirePlatform { get; init; } = ArchiveFormat.CurrentPlatform;
 
     public TrustLevel MinimumLevel { get; init; } = TrustLevel.Hash;
+
+    /// <summary>The passphrase to open a sealed archive with; unused for any other.</summary>
+    public string? Passphrase { get; init; }
+
+    /// <summary>A sealed archive's key, handed on by the run that derived it; tried before <see cref="Passphrase" />.</summary>
+    internal byte[]? SealKey { get; init; }
 }
 
 /// <summary>
@@ -23,11 +43,12 @@ public sealed class VerifiedArchive
     private readonly Dictionary<string, byte[]> _entries;
 
     internal VerifiedArchive(ArchiveManifest manifest, TrustLevel level, string manifestSha256, Dictionary<string, byte[]> entries,
-        string? signer = null)
+        string? signer = null, SealKey? sealKey = null)
     {
         Manifest = manifest;
         Level = level;
         Signer = signer;
+        SealKey = sealKey;
         ManifestSha256 = manifestSha256;
         _entries = entries;
     }
@@ -41,6 +62,9 @@ public sealed class VerifiedArchive
     ///     says about its own account is never a signer.
     /// </summary>
     public string? Signer { get; }
+
+    /// <summary>The key that opened a sealed archive, so a second run (the administrator's) need not ask again; null below the seal level.</summary>
+    public SealKey? SealKey { get; }
 
     /// <summary>The SHA-256 of manifest.json: one value that names this exact archive's content.</summary>
     public string ManifestSha256 { get; }
@@ -103,14 +127,14 @@ public static class ArchiveReader
         }
 
         string manifestSha = Dsse.Sha256Hex(manifestBytes);
-        TrustLevel level = VerifyEnvelope(envelopeBytes, manifestSha);
+        (TrustLevel level, SealKey? key) = VerifyEnvelope(envelopeBytes, manifestSha, options);
         if (level < options.MinimumLevel)
         {
             throw new ArchiveRejectedException($"This backup is at the '{Name(level)}' level and at least '{Name(options.MinimumLevel)}' is required.");
         }
 
         VerifyEntries(manifest, raw);
-        return new VerifiedArchive(manifest, level, manifestSha, raw);
+        return new VerifiedArchive(manifest, level, manifestSha, raw, sealKey: key);
     }
 
     public static string Name(TrustLevel level) => level switch
@@ -212,7 +236,7 @@ public static class ArchiveReader
         }
     }
 
-    private static TrustLevel VerifyEnvelope(byte[] envelopeBytes, string manifestSha)
+    private static (TrustLevel, SealKey?) VerifyEnvelope(byte[] envelopeBytes, string manifestSha, ArchiveReadOptions options)
     {
         DsseEnvelope envelope = Parse(envelopeBytes, ArchiveJson.Strict.DsseEnvelope, ArchiveFormat.SignatureEntry);
         if (envelope.PayloadType != ArchiveFormat.PayloadType)
@@ -245,18 +269,61 @@ public static class ArchiveReader
         {
             case "hash":
                 // A signature on a hash-level statement would claim more than the level says; refuse the ambiguity.
-                if (envelope.Signatures.Count != 0)
+                if (envelope.Signatures.Count != 0 || statement.Predicate.Kdf is not null)
                 {
-                    throw new ArchiveRejectedException("The backup says it is unsigned but carries a signature.");
+                    throw new ArchiveRejectedException("The backup says it is unsigned but carries a signature or a seal's settings.");
                 }
 
-                return TrustLevel.Hash;
+                return (TrustLevel.Hash, null);
             case "seal":
+                return (TrustLevel.Seal, VerifySeal(envelope, payload, statement.Predicate.Kdf, options));
             case "identity":
                 throw new ArchiveRejectedException($"This backup is at the '{statement.Predicate.Level}' level, which this version cannot check yet.");
             default:
                 throw new ArchiveRejectedException($"The backup claims a trust level '{statement.Predicate.Level}' this version does not know.");
         }
+    }
+
+    /// <summary>
+    ///     Checks the one <c>seal</c> signature: HMAC-SHA256, under the key the passphrase and the statement's own
+    ///     settings make, over DSSE's encoding of the statement. The settings are inside what is signed, so changing
+    ///     them only fails the check, and only the settings this version writes are tried.
+    /// </summary>
+    private static SealKey VerifySeal(DsseEnvelope envelope, byte[] payload, SealKdf? kdf, ArchiveReadOptions options)
+    {
+        if (Seal.KdfProblem(kdf) is { } problem)
+        {
+            throw new ArchiveRejectedException("The backup's seal cannot be checked: " + problem + ".");
+        }
+
+        if (envelope.Signatures is not [{ Keyid: Seal.KeyId } signature])
+        {
+            throw new ArchiveRejectedException("The backup says it is sealed but does not carry exactly one seal.");
+        }
+
+        byte[] sig;
+        try
+        {
+            sig = Convert.FromBase64String(signature.Sig);
+        }
+        catch (FormatException)
+        {
+            throw new ArchiveRejectedException("The backup's seal is not base64.");
+        }
+
+        byte[] encoded = Dsse.PreAuthEncoding(envelope.PayloadType, payload);
+        if (options.SealKey is { } handed && SealKey.FromBytes(kdf!, handed) is { } given)
+        {
+            return given.Check(encoded, sig) ? given : throw new SealNotOpenedException(SealNotOpenedException.WrongMessage, wrong: true);
+        }
+
+        if (options.Passphrase is null)
+        {
+            throw new SealNotOpenedException(SealNotOpenedException.NeededMessage, wrong: false);
+        }
+
+        SealKey key = SealKey.Derive(options.Passphrase, kdf!);
+        return key.Check(encoded, sig) ? key : throw new SealNotOpenedException(SealNotOpenedException.WrongMessage, wrong: true);
     }
 
     private static void VerifyEntries(ArchiveManifest manifest, Dictionary<string, byte[]> raw)

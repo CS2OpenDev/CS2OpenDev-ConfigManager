@@ -610,6 +610,7 @@ public class AdministratorTests
         IReadOnlyList<byte[]?> input = host.Elevator.Inputs.Single();
         await Assert.That(input[0]).IsEquivalentTo(await File.ReadAllBytesAsync(zip));
         await Assert.That(input[1]).IsEquivalentTo(await File.ReadAllBytesAsync(policy));
+        await Assert.That(input[2]).IsNull().Because("an unsealed backup hands on no key");
     }
 
     /// <summary>What travels over the pipe is read back whole, and a cut-off or oversized input is refused, never half-read.</summary>

@@ -8,9 +8,52 @@ namespace CS2OpenDev.ConfigManager.Cli;
 /// <summary>Opening archives and policies the one way every command does, and naming what they say.</summary>
 internal static class Archives
 {
-    /// <summary>Opens and verifies a v2 archive; null with <paramref name="problem" /> set when it is refused. See <see cref="RestoreSession.OpenArchive(string, string?, TrustLevel, out string?)" />.</summary>
-    public static VerifiedArchive? Open(string path, string? requirePlatform, TrustLevel minimumLevel, out string? problem) =>
-        RestoreSession.OpenArchive(path, requirePlatform, minimumLevel, out problem);
+    /// <summary>
+    ///     Opens and verifies a v2 archive; null with <paramref name="problem" /> set when it is refused. A sealed one
+    ///     is opened with what <paramref name="ask" /> gives. See
+    ///     <see cref="RestoreSession.OpenArchive(string, string?, TrustLevel, out string?, PassphrasePrompt, byte[])" />.
+    /// </summary>
+    public static VerifiedArchive? Open(string path, string? requirePlatform, TrustLevel minimumLevel, out string? problem, PassphrasePrompt? ask = null) =>
+        RestoreSession.OpenArchive(path, requirePlatform, minimumLevel, out problem, ask);
+
+    /// <summary>
+    ///     Where a sealed backup's passphrase comes from for one command: the file --passphrase-file names (once; a
+    ///     passphrase in a file that does not open the seal is not asked for again), or else the person at the
+    ///     terminal, without showing it. Null when neither is there, so the refusal says how to give one.
+    /// </summary>
+    public static PassphrasePrompt? Passphrase(CommandLine line, AcbHost host)
+    {
+        if (line.Value("passphrase-file") is { } file)
+        {
+            string passphrase = PassphraseFile(file, host);
+            return again => again ? null : passphrase;
+        }
+
+        return host.Interactive
+            ? again => host.ReadSecret(again ? "That passphrase does not open the seal. Passphrase (Enter alone to stop): " : "This backup is sealed. Passphrase: ")
+            : null;
+    }
+
+    /// <summary>
+    ///     A passphrase file's text: its first line, without the line break, or standard input's first line for
+    ///     <c>-</c>. Nothing else is trimmed, as a space may be part of the passphrase.
+    /// </summary>
+    public static string PassphraseFile(string file, AcbHost host)
+    {
+        string? text;
+        try
+        {
+            text = file == "-" ? host.ReadLine() : File.ReadAllText(file);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new UsageException($"The passphrase file {file} cannot be read: {ex.Message}");
+        }
+
+        int end = text?.IndexOfAny(['\r', '\n']) ?? -1;
+        text = end >= 0 ? text![..end] : text;
+        return string.IsNullOrEmpty(text) ? throw new UsageException($"The passphrase file {file} holds no passphrase on its first line.") : text;
+    }
 
     /// <summary>Loads a policy file; null with <paramref name="problem" /> set when it is refused, or when none was given.</summary>
     public static OrganiserPolicy? Policy(string? path, out string? problem) => RestoreSession.LoadPolicy(path, out problem);
@@ -37,7 +80,7 @@ internal static class Archives
     public static string LevelText(TrustLevel level) => level switch
     {
         TrustLevel.Hash => "hash (unsigned: anyone could have edited this; it shows only that the files match the manifest)",
-        TrustLevel.Seal => "seal (sealed with a passphrase)",
+        TrustLevel.Seal => "seal (opened with its passphrase: made by someone who knows it, and unchanged since)",
         _ => "identity (signed for a Steam account)"
     };
 

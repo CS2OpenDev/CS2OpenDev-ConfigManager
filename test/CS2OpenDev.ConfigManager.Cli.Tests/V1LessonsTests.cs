@@ -214,7 +214,7 @@ public class V1LessonsTests
         await Assert.That(host.Output).Contains("never from a path");
         await Assert.That(host.MachineStoreChecks).IsEmpty();
 
-        host.ElevatedInput = [File.ReadAllBytes(zip), null];
+        host.ElevatedInput = [File.ReadAllBytes(zip), null, null];
         int swapped = host.Run("__elevated", "restore", share, "--digest", new string('0', 64), "--only", "nvidia", "--pipe", "acb-test");
 
         await Assert.That(swapped).IsEqualTo(ExitCodes.Refused).Because(host.All);

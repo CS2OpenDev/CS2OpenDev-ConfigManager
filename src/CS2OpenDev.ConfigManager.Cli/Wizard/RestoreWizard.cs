@@ -30,7 +30,8 @@ internal sealed class RestoreWizard : IDisposable
     private readonly TextField _archive = new() { X = 0, Y = 1, Width = Dim.Fill() };
     private readonly TextField _policy = new() { X = 0, Y = 4, Width = Dim.Fill() };
     private readonly TextField _steam = new() { X = 0, Y = 7, Width = Dim.Fill() };
-    private readonly Button _toUndo = new() { X = 0, Y = 11, Text = "Undo a restore instead" };
+    private readonly TextField _passphrase = new() { X = 0, Y = 10, Width = Dim.Fill(), Secret = true };
+    private readonly Button _toUndo = new() { X = 0, Y = 14, Text = "Undo a restore instead" };
     private readonly ListView _checkText = Reading();
     private readonly ListView _reviewList = new() { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Percent(40) };
     private readonly ListView _reviewText = Reading();
@@ -58,14 +59,16 @@ internal sealed class RestoreWizard : IDisposable
         _open.Add(new Label { X = 0, Y = 0, Text = "Backup file (.zip):" }, _archive,
             new Label { X = 0, Y = 3, Text = "Organiser's policy file (optional):" }, _policy,
             new Label { X = 0, Y = 6, Text = "Steam folder (optional; found when empty):" }, _steam,
-            new Label { X = 0, Y = 9, Text = "Nothing on this PC changes until you press Restore." }, _toUndo);
+            new Label { X = 0, Y = 9, Text = "Passphrase (only for a sealed backup):" }, _passphrase,
+            new Label { X = 0, Y = 12, Text = "Nothing on this PC changes until you press Restore." }, _toUndo);
         _toUndo.Accepting += (_, e) =>
         {
             SwitchToUndo = true;
             Wizard.RequestStop();
             e.Handled = true;
         };
-        _open.HelpText = "Pick the backup to restore. An organiser's policy can only narrow what is restored.";
+        _open.HelpText = "Pick the backup to restore. An organiser's policy can only narrow what is restored. "
+                         + "A sealed backup opens only with the passphrase it was sealed with.";
 
         _check.Add(_checkText);
         _check.HelpText = "What the backup is, and whether it may be restored here.";
@@ -187,6 +190,7 @@ internal sealed class RestoreWizard : IDisposable
                 _flow.ArchivePath = _archive.Text.Trim();
                 _flow.PolicyPath = _policy.Text.Trim();
                 _flow.SteamPath = _steam.Text.Trim();
+                _flow.Passphrase = _passphrase.Text;
                 _flow.Check();
                 Show(_checkText, _flow.CheckLines());
                 break;

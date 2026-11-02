@@ -53,6 +53,11 @@ internal sealed class TestHost : IDisposable
 
     public Queue<string> Answers { get; } = new();
 
+    /// <summary>What the person types at hidden prompts (passphrases), in order; the prompts asked are kept in <see cref="SecretPrompts" />.</summary>
+    public Queue<string> Secrets { get; } = new();
+
+    public List<string> SecretPrompts { get; } = [];
+
     public bool Interactive { get; set; }
 
     public HashSet<string> Running { get; } = new(StringComparer.Ordinal);
@@ -114,6 +119,11 @@ internal sealed class TestHost : IDisposable
             Out = _out,
             Err = _err,
             ReadLine = () => Answers.Count > 0 ? Answers.Dequeue() : null,
+            ReadSecret = prompt =>
+            {
+                SecretPrompts.Add(prompt);
+                return Secrets.Count > 0 ? Secrets.Dequeue() : null;
+            },
             Interactive = Interactive,
             Platform = ArchiveFormat.CurrentPlatform,
             UserStoreRoot = UserStore,
@@ -180,7 +190,7 @@ internal static class TestArchives
     ///     its SHA-256 checked by the engine against capture.vdf. Every entry matches the manifest, so the reader
     ///     accepts it; what it asks for is up to the restorer's rules.
     /// </summary>
-    public static string Craft(TempDir temp, string capture, IReadOnlyDictionary<string, string>? files = null, string? platform = null)
+    public static string Craft(TempDir temp, string capture, IReadOnlyDictionary<string, string>? files = null, string? platform = null, SealKey? seal = null)
     {
         string staging = temp.Sub($"staging-{Interlocked.Increment(ref _count)}");
         Directory.CreateDirectory(staging);
@@ -194,7 +204,7 @@ internal static class TestArchives
 
         string zip = temp.Sub($"crafted-{_count}.zip");
         ArchiveWriter.Write(staging, zip, new ArchiveContent(platform ?? ArchiveFormat.CurrentPlatform!, new ArchiveTool("hand-made", "test"),
-            FakeSteam.AccountId, [], "test\n"), DateTimeOffset.UtcNow, CancellationToken.None);
+            FakeSteam.AccountId, [], "test\n"), DateTimeOffset.UtcNow, CancellationToken.None, seal);
         return zip;
     }
 

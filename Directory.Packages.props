@@ -24,6 +24,10 @@
         <!-- The wizard, acb with no command. CI publishes acb Native AOT on win-x64 and linux-x64 with it. -->
         <PackageVersion Include="Terminal.Gui" Version="2.5.0"/>
 
+        <!-- Argon2id for the seal level's key. Managed code, no native library, so it publishes Native AOT; the
+             tests check it against RFC 9106's test vector. -->
+        <PackageVersion Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1"/>
+
         <!-- Tests. TUnit on Microsoft.Testing.Platform, like the rest of the CS2OpenDev family. -->
         <PackageVersion Include="TUnit" Version="1.76.0"/>
     </ItemGroup>

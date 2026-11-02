@@ -73,7 +73,8 @@ public sealed record DigestSet([property: JsonPropertyName("sha256")] string Sha
 
 public sealed record StatementSubject(string Name, DigestSet Digest);
 
-public sealed record TrustPredicate(string Level);
+/// <summary>The level, and at the seal level how its key was made from the passphrase (absent below it).</summary>
+public sealed record TrustPredicate(string Level, SealKdf? Kdf = null);
 
 /// <summary>The in-toto style statement a DSSE envelope carries: which manifest, at which trust level.</summary>
 public sealed record Statement(
