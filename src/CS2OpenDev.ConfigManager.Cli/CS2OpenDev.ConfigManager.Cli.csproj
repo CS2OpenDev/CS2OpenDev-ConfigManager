@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- acb, the restorer: verify, show, plan, restore, undo and backup, headless. Published Native AOT for win-x64
+         and linux-x64, one binary with no .NET install. It reads only v2 archives, through Core's ArchiveReader. -->
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <AssemblyName>acb</AssemblyName>
+        <RootNamespace>CS2OpenDev.ConfigManager.Cli</RootNamespace>
+        <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
+        <PublishAot>true</PublishAot>
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <UseSystemResourceKeys>false</UseSystemResourceKeys>
+        <!-- Windows reads this to decide how to start acb: as the invoking user, never elevated by itself. The
+             administrator's part is a second, elevated run that acb starts only when asked. -->
+        <ApplicationManifest>app.manifest</ApplicationManifest>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="CS2OpenDev.ConfigManager.Cli.Tests"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\CS2OpenDev.ConfigManager.Core\CS2OpenDev.ConfigManager.Core.csproj"/>
+    </ItemGroup>
+
+</Project>

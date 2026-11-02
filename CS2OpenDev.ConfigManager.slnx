@@ -9,6 +9,7 @@
     </Folder>
     <Folder Name="/src/">
         <Project Path="src/CS2OpenDev.ConfigManager.Core/CS2OpenDev.ConfigManager.Core.csproj"/>
+        <Project Path="src/CS2OpenDev.ConfigManager.Cli/CS2OpenDev.ConfigManager.Cli.csproj"/>
     </Folder>
     <Folder Name="/test/">
         <Project Path="test/CS2OpenDev.ConfigManager.Core.Tests/CS2OpenDev.ConfigManager.Core.Tests.csproj"/>
