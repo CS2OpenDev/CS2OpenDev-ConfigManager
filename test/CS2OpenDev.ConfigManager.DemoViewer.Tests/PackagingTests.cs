@@ -29,6 +29,25 @@ public class PackagingTests
     }
 
     /// <summary>
+    ///     The plugin's own build folder (what ships) holds the Argon2 assemblies sealed backups need, and no copy of
+    ///     an assembly the host loads itself, which the host would refuse if it differed from its own.
+    /// </summary>
+    [Test]
+    public async Task ThePluginShips_CoresOwnPackages_AndNoneOfTheHosts()
+    {
+        string configuration = Path.GetFileName(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        string ships = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "CS2OpenDev.ConfigManager.DemoViewer", configuration));
+        string[] files = [.. Directory.EnumerateFiles(ships, "*.dll").Select(Path.GetFileName).OfType<string>()];
+
+        await Assert.That(files).Contains("Konscious.Security.Cryptography.Argon2.dll");
+        await Assert.That(files).Contains("Konscious.Security.Cryptography.Blake2.dll");
+        await Assert.That(files).Contains("CS2OpenDev.ConfigManager.Core.dll");
+        await Assert.That(files.Where(f => f.StartsWith("Avalonia", StringComparison.Ordinal) || f.StartsWith("DemoViewer.", StringComparison.Ordinal)
+                                           || f.StartsWith("CommunityToolkit", StringComparison.Ordinal) || f.StartsWith("Microsoft.", StringComparison.Ordinal)))
+            .IsEmpty().Because(ships);
+    }
+
+    /// <summary>
     ///     A plugin that is not bundled with DemoViewer.NET is held to the third-party naming rules: an id outside
     ///     the reserved net.demoviewer. prefix, and contribution ids under its own id.
     /// </summary>

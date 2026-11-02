@@ -60,12 +60,35 @@ public class CheckBackupTests
         await Assert.That(results).Contains(r => r.EndsWith("for " + other, StringComparison.Ordinal));
     }
 
+    /// <summary>A sealed backup is checked with the page's passphrase: without one the page asks for it, and a wrong one means "do not restore".</summary>
+    [Test]
+    public async Task ASealedBackup_IsCheckedWithThePassphrase()
+    {
+        const string Passphrase = "correct horse battery staple";
+        using Scratch scratch = new();
+        string zip = scratch.Archive(ArchiveFormat.CurrentPlatform ?? Platforms.WindowsX64, SealKey.Create(Passphrase));
+
+        List<string> none = [];
+        string asked = ConfigBackupPageViewModel.Check(zip, none, "");
+        List<string> wrong = [];
+        string refused = ConfigBackupPageViewModel.Check(zip, wrong, "not the passphrase at all");
+        List<string> results = [];
+        string opened = ConfigBackupPageViewModel.Check(zip, results, Passphrase);
+
+        await Assert.That(asked).Contains("is sealed with a passphrase");
+        await Assert.That(none).IsEmpty();
+        await Assert.That(refused).StartsWith("Do not restore");
+        await Assert.That(wrong).IsEmpty();
+        await Assert.That(opened).Contains("opens with this passphrase");
+        await Assert.That(results[0]).StartsWith("Trust level: seal");
+    }
+
     /// <summary>A temp folder holding a hand-made v2 archive of one cfg file.</summary>
     private sealed class Scratch : IDisposable
     {
         private readonly string _dir = Path.Combine(Path.GetTempPath(), "dv-acb-plugin-" + Guid.NewGuid().ToString("N"));
 
-        public string Archive(string platform)
+        public string Archive(string platform, SealKey? seal = null)
         {
             string staging = Path.Combine(_dir, "staging");
             Directory.CreateDirectory(Path.Combine(staging, "files", "cs2game"));
@@ -73,7 +96,7 @@ public class CheckBackupTests
             File.WriteAllText(Path.Combine(staging, "files", "cs2game", "autoexec.cfg"), "echo autoexec");
             string zip = Path.Combine(_dir, "backup.zip");
             ArchiveWriter.Write(staging, zip, new ArchiveContent(platform, new ArchiveTool("Advanced Config Backup", "test"), null, [], "test\n"),
-                DateTimeOffset.UtcNow, CancellationToken.None);
+                DateTimeOffset.UtcNow, CancellationToken.None, seal);
             return zip;
         }
 

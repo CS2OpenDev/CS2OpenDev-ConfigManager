@@ -59,6 +59,17 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
     [ObservableProperty]
     private bool _includeGameStateIntegration;
 
+    /// <summary>Seal the next backup with <see cref="Passphrase" />. Not saved between sessions, like the passphrase.</summary>
+    [ObservableProperty]
+    private bool _sealWithPassphrase;
+
+    /// <summary>The passphrase to seal a new backup with, or to check a sealed one. Held only while the page is open; never saved.</summary>
+    [ObservableProperty]
+    private string _passphrase = "";
+
+    [ObservableProperty]
+    private bool _showPassphrase;
+
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(CreateBackupCommand))]
     private bool _isBusy;
@@ -175,6 +186,15 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
 
     private bool CanCreateBackup() => IsAvailable && !IsBusy;
 
+    /// <summary>Six random words from the EFF's list, shown so they can be written down, and the seal turned on.</summary>
+    [RelayCommand]
+    private void GeneratePassphrase()
+    {
+        Passphrase = Seal.GeneratePhrase();
+        ShowPassphrase = true;
+        SealWithPassphrase = true;
+    }
+
     [RelayCommand(CanExecute = nameof(CanCreateBackup))]
     private void CreateBackup()
     {
@@ -192,6 +212,18 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
             return;
         }
 
+        string? passphrase = null;
+        if (SealWithPassphrase)
+        {
+            if (Seal.PassphraseProblem(Passphrase) is { } weak)
+            {
+                Status = "Not saved: " + weak + ".";
+                return;
+            }
+
+            passphrase = Passphrase;
+        }
+
         string folder = string.IsNullOrWhiteSpace(OutputFolder) ? DefaultOutputFolder() : OutputFolder;
         ArchiveTool tool = new("Advanced Config Backup (DemoViewer.NET plugin)", ExtensionVersion());
         string zip = Path.Combine(folder, BackupBuilder.DefaultFileName(DateTime.Now));
@@ -204,7 +236,8 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
         {
             try
             {
-                report = BackupBuilder.Create(options, zip, tool, DateTimeOffset.Now, job.CancellationToken);
+                SealKey? seal = passphrase is null ? null : SealKey.Create(passphrase);
+                report = BackupBuilder.Create(options, zip, tool, DateTimeOffset.Now, job.CancellationToken, seal);
             }
 #pragma warning disable CA1031 // Reported on the page and in a notification rather than as a faulted job.
             catch (Exception ex)
@@ -216,10 +249,10 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
             return Task.CompletedTask;
         }, new JobOptions(BuiltInJobKinds.Save, JobPriority.UserRequested)));
 
-        handle.Completed += _ => Finish(zip, report, failure);
+        handle.Completed += _ => Finish(zip, report, failure, passphrase is not null);
     }
 
-    private void Finish(string zip, RunReport? report, Exception? failure)
+    private void Finish(string zip, RunReport? report, Exception? failure, bool isSealed)
     {
         IsBusy = false;
         if (report is null)
@@ -247,7 +280,8 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
         int saved = report.Count("done");
         List<string> missing = [.. report.Results.Where(r => r.Outcome != "done").Select(r => Sections.Label(r.Section))];
         string notIn = missing.Count == 0 ? "" : $" Not in it: {string.Join(", ", missing)}.";
-        Status = $"Saved {saved} of {report.Results.Count} parts to {zip}.{notIn}";
+        Status = $"Saved {saved} of {report.Results.Count} parts to {zip}.{notIn}"
+                 + (isSealed ? " It is sealed: acb asks for the passphrase before it restores it, and nothing can open it without the passphrase." : "");
         _context.Notifications.Post(new Notification("configbackup.saved",
             missing.Count == 0 ? NotificationSeverity.Success : NotificationSeverity.Warning,
             missing.Count == 0 ? "Config backup saved" : "Config backup saved without some parts",
@@ -274,18 +308,29 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
     public void CheckBackup(string zipPath)
     {
         Results.Clear();
-        Status = Check(zipPath, Results);
+        Status = Check(zipPath, Results, Passphrase);
     }
 
-    /// <summary>What <see cref="CheckBackup" /> shows: the status line it returns, and a line per fact into <paramref name="results" />.</summary>
-    internal static string Check(string zipPath, ICollection<string> results)
+    /// <summary>
+    ///     What <see cref="CheckBackup" /> shows: the status line it returns, and a line per fact into
+    ///     <paramref name="results" />. A sealed backup is opened with <paramref name="passphrase" />.
+    /// </summary>
+    internal static string Check(string zipPath, ICollection<string> results, string? passphrase = null)
     {
         ArgumentNullException.ThrowIfNull(zipPath);
         ArgumentNullException.ThrowIfNull(results);
         VerifiedArchive archive;
         try
         {
-            archive = ArchiveReader.Open(zipPath, new ArchiveReadOptions { RequirePlatform = null });
+            archive = ArchiveReader.Open(zipPath, new ArchiveReadOptions
+            {
+                RequirePlatform = null,
+                Passphrase = string.IsNullOrEmpty(passphrase) ? null : passphrase
+            });
+        }
+        catch (SealNotOpenedException ex) when (!ex.Wrong)
+        {
+            return $"{Path.GetFileName(zipPath)} is sealed with a passphrase. Type it in the passphrase box and check it again.";
         }
         catch (ArchiveRejectedException ex)
         {
@@ -300,8 +345,12 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
 
         ArchiveManifest manifest = archive.Manifest;
         bool isUnsigned = archive.Level == TrustLevel.Hash;
-        results.Add("Trust level: " + ArchiveReader.Name(archive.Level)
-                    + (isUnsigned ? " (unsigned: anyone could have edited this; it shows only that the files match the manifest)" : ""));
+        results.Add("Trust level: " + ArchiveReader.Name(archive.Level) + archive.Level switch
+        {
+            TrustLevel.Hash => " (unsigned: anyone could have edited this; it shows only that the files match the manifest)",
+            TrustLevel.Seal => " (the passphrase opens its seal; anyone who knows or guesses the passphrase could have made it)",
+            _ => ""
+        });
         results.Add(string.Create(CultureInfo.CurrentCulture,
             $"Made {manifest.Created.ToLocalTime():yyyy-MM-dd HH:mm} by {manifest.Tool.Name} {manifest.Tool.Version}, for {manifest.Platform}"));
         foreach (ArchiveSection section in manifest.Sections)
@@ -309,9 +358,12 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
             results.Add(section.Label + (section.Notes is { Count: > 0 } notes ? " (" + string.Join("; ", notes) + ")" : ""));
         }
 
-        return isUnsigned
-            ? $"{Path.GetFileName(zipPath)}: {manifest.Entries.Count} files, each matching its manifest, so nothing was damaged or changed by accident. It is unsigned, so anyone could have edited it."
-            : $"{Path.GetFileName(zipPath)} is unchanged since it was made: {manifest.Entries.Count} files, each matching its manifest.";
+        return archive.Level switch
+        {
+            TrustLevel.Hash => $"{Path.GetFileName(zipPath)}: {manifest.Entries.Count} files, each matching its manifest, so nothing was damaged or changed by accident. It is unsigned, so anyone could have edited it.",
+            TrustLevel.Seal => $"{Path.GetFileName(zipPath)} opens with this passphrase, so it was made by someone who knows it and is unchanged since: {manifest.Entries.Count} files, each matching its manifest.",
+            _ => $"{Path.GetFileName(zipPath)} is unchanged since it was made: {manifest.Entries.Count} files, each matching its manifest."
+        };
     }
 
     private bool CanRevealArchive() => LastArchive is not null;

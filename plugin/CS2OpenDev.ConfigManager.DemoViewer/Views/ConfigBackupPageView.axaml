@@ -50,13 +50,33 @@
             </Grid>
         </StackPanel>
 
+        <StackPanel Spacing="4">
+            <TextBlock Foreground="{DynamicResource TextDim}" FontSize="11"
+                       Text="Passphrase (to seal a new backup, or to check a sealed one; never saved)" />
+            <Grid ColumnDefinitions="*,Auto,Auto">
+                <TextBox Grid.Column="0" Text="{Binding Passphrase}" FontSize="11"
+                         RevealPassword="{Binding ShowPassphrase}" PasswordChar="*" />
+                <CheckBox Grid.Column="1" IsChecked="{Binding ShowPassphrase}" FontSize="11" Margin="8,0,0,0">
+                    <TextBlock Text="Show" Foreground="{DynamicResource TextValue}" />
+                </CheckBox>
+                <Button Grid.Column="2" Content="Generate" Classes="ghost" Padding="10,4" Margin="8,0,0,0"
+                        Command="{Binding GeneratePassphraseCommand}"
+                        ToolTip.Tip="Six random words, about 77 bits: far harder to guess than most passphrases people choose. Write them down; they are not kept." />
+            </Grid>
+            <CheckBox IsChecked="{Binding SealWithPassphrase}" FontSize="11">
+                <TextBlock Text="Seal the backup with this passphrase" Foreground="{DynamicResource TextValue}" />
+            </CheckBox>
+            <TextBlock Foreground="{DynamicResource TextDim}" FontSize="10" TextWrapping="Wrap"
+                       Text="A sealed backup opens only with its passphrase, which proves it was made by someone who knows the passphrase and is unchanged since. Anyone with the zip can try passphrases against it, though, and a guessed one could seal a changed copy, so use at least 12 characters, or better, a generated phrase. Plain letters are safest: an accented letter can be typed another way on another PC, and then the passphrase does not open the seal. Without the passphrase the backup cannot be restored." />
+        </StackPanel>
+
         <StackPanel Orientation="Horizontal" Spacing="8">
             <Button Content="Create backup" Classes="primary" Padding="10,4"
                     Command="{Binding CreateBackupCommand}" />
             <Button Content="Show in folder" Classes="ghost" Padding="10,4"
                     Command="{Binding RevealArchiveCommand}" />
             <Button Content="Check a backup" Classes="ghost" Padding="10,4" Click="OnCheck"
-                    ToolTip.Tip="Check a backup zip: every file against its manifest, nothing added or missing. An unsigned backup can still have been edited by anyone." />
+                    ToolTip.Tip="Check a backup zip: every file against its manifest, nothing added or missing, and a sealed one against the passphrase above. An unsigned backup can still have been edited by anyone." />
         </StackPanel>
 
         <TextBlock Foreground="{DynamicResource TextValue}" FontSize="11" TextWrapping="Wrap" Text="{Binding Status}" />

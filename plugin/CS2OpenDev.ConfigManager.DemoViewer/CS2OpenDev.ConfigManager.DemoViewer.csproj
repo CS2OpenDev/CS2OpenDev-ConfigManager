@@ -29,6 +29,18 @@
         <ProjectReference Include="..\..\src\CS2OpenDev.ConfigManager.Core\CS2OpenDev.ConfigManager.Core.csproj"/>
     </ItemGroup>
 
+    <!-- The plugin ships beside its DLL the third-party assemblies Core needs (Argon2 for sealed backups) and none the
+         host already loads: DemoViewer.NET refuses a plugin whose copy of a host assembly differs from its own. -->
+    <PropertyGroup>
+        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    </PropertyGroup>
+    <Target Name="ShipOnlyCoresOwnPackages" AfterTargets="ResolveLockFileCopyLocalFiles">
+        <ItemGroup>
+            <ReferenceCopyLocalPaths Remove="@(ReferenceCopyLocalPaths)"
+                                     Condition="'%(ReferenceCopyLocalPaths.NuGetPackageId)' != '' and !$([System.String]::Copy('%(ReferenceCopyLocalPaths.NuGetPackageId)').StartsWith('Konscious.Security.Cryptography.'))"/>
+        </ItemGroup>
+    </Target>
+
     <!-- The Avalonia XAML rewrite re-embeds the .pdb path after Roslyn, so Release ships no .pdb path at all. -->
     <PropertyGroup Condition="'$(Configuration)' == 'Release'">
         <DebugType>none</DebugType>
