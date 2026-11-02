@@ -103,6 +103,9 @@ internal sealed class TestHost : IDisposable
     /// <summary>Everything acb wrote, for a failure message.</summary>
     public string All => _out + Environment.NewLine + _err;
 
+    /// <summary>Stands in for the wizard when acb is run with no command at a terminal.</summary>
+    public Func<AcbHost, int>? Wizard { get; set; }
+
     public int Run(params string[] args) => Acb.Run(args, Host());
 
     /// <summary>The host acb runs with: this test's console, stores, stand-ins and fake Steam.</summary>
@@ -144,7 +147,8 @@ internal sealed class TestHost : IDisposable
             },
             BeforeRollback = BeforeRollback,
             StartNvidia = StartNvidia,
-            DriverTimeoutMs = DriverTimeoutMs
+            DriverTimeoutMs = DriverTimeoutMs,
+            Wizard = Wizard
         };
     }
 

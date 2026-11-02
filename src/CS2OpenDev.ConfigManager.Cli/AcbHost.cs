@@ -51,6 +51,9 @@ internal sealed class AcbHost
     /// <summary>Creates and checks the machine store before an elevated run writes to it; throws when it may not be used.</summary>
     public required Action<string, string> EnsureMachineStore { get; init; }
 
+    /// <summary>Runs the wizard on the terminal and returns its exit code; null where there is no screen to draw on (tests).</summary>
+    public Func<AcbHost, int>? Wizard { get; init; }
+
     /// <summary>Called with the record's folder just before a failed part is rolled back. Tests only.</summary>
     internal Action<string>? BeforeRollback { get; init; }
 
@@ -80,6 +83,7 @@ internal sealed class AcbHost
         Elevator = OperatingSystem.IsWindows() ? new WindowsElevator() : new NoElevator(),
         ConnectElevated = pipe => OperatingSystem.IsWindows() ? WindowsElevator.Connect(pipe) : null,
         Now = () => DateTimeOffset.Now,
+        Wizard = CS2OpenDev.ConfigManager.Cli.Wizard.RestoreWizard.Run,
         EnsureMachineStore = (root, parent) =>
         {
             if (!OperatingSystem.IsWindows())
@@ -89,6 +93,29 @@ internal sealed class AcbHost
 
             StoreSecurity.EnsureMachineStore(root, parent);
         }
+    };
+
+    /// <summary>This host with its words going to <paramref name="writer" />, for a run inside the wizard, which owns the screen.</summary>
+    public AcbHost WithWriter(TextWriter writer) => new()
+    {
+        Out = writer,
+        Err = writer,
+        ReadLine = () => null,
+        Interactive = false,
+        Platform = Platform,
+        UserStoreRoot = UserStoreRoot,
+        MachineStoreRoot = MachineStoreRoot,
+        MachineStoreParent = MachineStoreParent,
+        IsRunning = IsRunning,
+        LocateSteam = LocateSteam,
+        Elevation = Elevation,
+        Elevator = Elevator,
+        ConnectElevated = ConnectElevated,
+        Now = Now,
+        EnsureMachineStore = EnsureMachineStore,
+        BeforeRollback = BeforeRollback,
+        StartNvidia = StartNvidia,
+        DriverTimeoutMs = DriverTimeoutMs
     };
 
     /// <summary>Asks a yes-or-no question whose default is no; anything but y or yes, or nobody to answer, is no.</summary>

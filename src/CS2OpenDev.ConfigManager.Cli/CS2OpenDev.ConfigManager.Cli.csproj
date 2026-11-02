@@ -28,6 +28,10 @@
     </ItemGroup>
 
     <ItemGroup>
+        <PackageReference Include="Terminal.Gui"/>
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="..\CS2OpenDev.ConfigManager.Core\CS2OpenDev.ConfigManager.Core.csproj"/>
     </ItemGroup>
 

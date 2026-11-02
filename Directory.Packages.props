@@ -21,6 +21,9 @@
         <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.13"/>
         <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.13"/>
 
+        <!-- The wizard, acb with no command. CI publishes acb Native AOT on win-x64 and linux-x64 with it. -->
+        <PackageVersion Include="Terminal.Gui" Version="2.5.0"/>
+
         <!-- Tests. TUnit on Microsoft.Testing.Platform, like the rest of the CS2OpenDev family. -->
         <PackageVersion Include="TUnit" Version="1.76.0"/>
     </ItemGroup>

@@ -5,6 +5,7 @@ internal static class Acb
 {
     public const string Usage = """
         Usage:
+          acb                                              the step-by-step restore wizard (needs a terminal)
           acb verify  <backup.zip> [--policy f] [--json]       check it; say its trust level, when it was made, what it holds
           acb show    <backup.zip> [--section s | --file p]    list it, or print one part or one file
           acb plan    <backup.zip> [options] [--json]          what a restore would change; changes nothing
@@ -38,7 +39,12 @@ internal static class Acb
         ArgumentNullException.ThrowIfNull(host);
         if (args.Count == 0)
         {
-            host.Err.WriteLine("The step-by-step wizard comes in a later version. Until then, use the commands:");
+            if (host.Interactive && host.Wizard is { } wizard)
+            {
+                return wizard(host);
+            }
+
+            host.Err.WriteLine("The step-by-step wizard needs a terminal. Without one, use the commands:");
             host.Err.WriteLine();
             host.Err.WriteLine(Usage);
             return ExitCodes.Usage;

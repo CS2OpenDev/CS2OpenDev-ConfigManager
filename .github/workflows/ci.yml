@@ -42,7 +42,14 @@ jobs:
         run: dotnet run --project test/CS2OpenDev.ConfigManager.Core.Tests -c Release --no-build
 
       - name: acb tests
+        if: runner.os == 'Windows'
         run: dotnet run --project test/CS2OpenDev.ConfigManager.Cli.Tests -c Release --no-build
+
+      # On Linux the wizard's screen test needs a terminal (Terminal.Gui's driver waits on the one it starts in),
+      # so the suite runs under script(1), which gives it one with a size.
+      - name: acb tests (in a terminal)
+        if: runner.os == 'Linux'
+        run: script -qec "stty cols 120 rows 40; dotnet run --project test/CS2OpenDev.ConfigManager.Cli.Tests -c Release --no-build" /dev/null
 
       - name: DemoViewer.NET plugin tests
         run: dotnet run --project test/CS2OpenDev.ConfigManager.DemoViewer.Tests -c Release --no-build
