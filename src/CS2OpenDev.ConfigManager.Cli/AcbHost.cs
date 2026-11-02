@@ -5,9 +5,11 @@ using CS2OpenDev.ConfigManager.Restoring;
 namespace CS2OpenDev.ConfigManager.Cli;
 
 /// <summary>
-///     Everything acb reaches outside its own process: the console, the undo stores, running processes, the
-///     administrator question and the clock. <see cref="Real" /> is the machine; tests build one around temp
-///     folders and stand-ins, so no test needs the real Steam, registry, driver or UAC.
+///     Everything acb reaches outside its own process: the console, the undo stores, running processes, where
+///     Steam is, the administrator question and the clock. <see cref="Real" /> is the machine; tests build one
+///     around temp folders and stand-ins, so no test needs the real Steam folder or UAC. The registry, power plan
+///     and driver are not behind this yet: a test reaches them only through a section it restores, so tests restore
+///     those sections only as a plan.
 /// </summary>
 internal sealed class AcbHost
 {
@@ -34,9 +36,15 @@ internal sealed class AcbHost
 
     public required Func<string, bool> IsRunning { get; init; }
 
+    /// <summary>Finds Steam from a folder, or on the PC when given null.</summary>
+    public required Func<string?, SteamInstall?> LocateSteam { get; init; }
+
     public required Func<ElevationState> Elevation { get; init; }
 
     public required IElevator Elevator { get; init; }
+
+    /// <summary>The elevated run's way back to the run that started it, by pipe name; null when there is none.</summary>
+    public required Func<string, IElevatedChannel?> ConnectElevated { get; init; }
 
     public required Func<DateTimeOffset> Now { get; init; }
 
@@ -45,6 +53,12 @@ internal sealed class AcbHost
 
     /// <summary>Called with the record's folder just before a failed part is rolled back. Tests only.</summary>
     internal Action<string>? BeforeRollback { get; init; }
+
+    /// <summary>Starts NVIDIA's driver API for the engine; null starts the real one. Tests only.</summary>
+    internal NvidiaStarter? StartNvidia { get; init; }
+
+    /// <summary>How long the engine waits for an NVIDIA driver part. Tests only.</summary>
+    internal int DriverTimeoutMs { get; init; } = ConfigBackup.DriverPartTimeoutMs;
 
     public UndoStore UserStore => new(UserStoreRoot, isMachine: false);
 
@@ -61,8 +75,10 @@ internal sealed class AcbHost
         MachineStoreRoot = UndoStore.MachineRoot(),
         MachineStoreParent = UndoStore.MachineParent(),
         IsRunning = SteamInstall.IsRunning,
+        LocateSteam = SteamInstall.Locate,
         Elevation = ElevationState.Detect,
         Elevator = OperatingSystem.IsWindows() ? new WindowsElevator() : new NoElevator(),
+        ConnectElevated = pipe => OperatingSystem.IsWindows() ? WindowsElevator.Connect(pipe) : null,
         Now = () => DateTimeOffset.Now,
         EnsureMachineStore = (root, parent) =>
         {

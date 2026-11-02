@@ -409,12 +409,113 @@ public class RobustnessTests
         await Assert.That(why).IsNull();
         await Assert.That(error?.Message).IsEqualTo("no driver");
 
+        // One thread at a time is in the driver: a second call waits for a running one, and is not run past its limit.
+        using ManualResetEventSlim busy = new();
+        using ManualResetEventSlim inside = new();
+        Task<string?> first = Task.Run<string?>(() => KitBackup.RunOnDriverWorker(() =>
+        {
+            inside.Set();
+            busy.Wait();
+        }, CancellationToken.None, 60000, out _));
+        inside.Wait();
+        bool overlapped = false;
+        why = KitBackup.RunOnDriverWorker(() => overlapped = true, CancellationToken.None, 300, out error);
+        await Assert.That(why).IsNotNull();
+        await Assert.That(why!).Contains("busy with another call");
+        await Assert.That(overlapped).IsFalse();
+        busy.Set();
+        await Assert.That(await first).IsNull();
+        why = KitBackup.RunOnDriverWorker(() => ran = true, CancellationToken.None, 5000, out error);
+        await Assert.That(why).IsNull();
+        await Assert.That(ran).IsTrue();
+
         using ManualResetEventSlim second = new();
         using CancellationTokenSource cancel = new(TimeSpan.FromMilliseconds(200));
         why = KitBackup.RunOnDriverWorker(() => second.Wait(), cancel.Token, 60000, out error);
         second.Set();
         await Assert.That(why).IsNotNull();
         await Assert.That(why!).Contains("cancelled");
+    }
+
+    /// <summary>
+    ///     A driver part's worker given up on before its first change never makes one, so that part changed nothing;
+    ///     one given up on after it started may have changed the PC, and its record, written before each change,
+    ///     covers what it changed.
+    /// </summary>
+    [Test]
+    public async Task ADriverWorkerGivenUpOn_ChangesNothingLate_UnlessItHadStarted()
+    {
+        DriverGate early = new();
+        await Assert.That(early.GiveUp()).IsFalse();
+        await Assert.That(early.Enter).Throws<OperationCanceledException>();
+
+        DriverGate late = new();
+        late.Enter();
+        await Assert.That(late.GiveUp()).IsTrue();
+        late.Enter();
+
+        await Assert.That(KitBackup.DriverTimeoutDetail(false, isUndo: false)).Contains("nothing of this part was changed");
+        await Assert.That(KitBackup.DriverTimeoutDetail(true, isUndo: false)).Contains("not known");
+        await Assert.That(KitBackup.DriverTimeoutDetail(true, isUndo: false)).Contains("acb undo");
+        await Assert.That(KitBackup.DriverTimeoutDetail(true, isUndo: true)).Contains("acb undo again");
+    }
+
+    /// <summary>
+    ///     Only no NVIDIA GPU or no driver library stays so; any other failure of NVAPI's start may be a driver that
+    ///     is updating or recovering, so the part is left for later instead of skipped as done.
+    /// </summary>
+    [Test]
+    [Arguments(0, false)]
+    [Arguments(-6, true)]
+    [Arguments(-2, true)]
+    [Arguments(-1, false)]
+    [Arguments(-3, false)]
+    [Arguments(-4, false)]
+    [Arguments(-104, false)]
+    public async Task NvapiStartStatus_IsLastingOnlyForNoGpuOrNoLibrary(int status, bool lasting)
+    {
+        await Assert.That(NvidiaDrs.IsLastingInitStatus(status)).IsEqualTo(lasting);
+        string? problem = NvidiaDrs.InitProblem(status);
+        if (status == 0)
+        {
+            await Assert.That(problem).IsNull();
+        }
+        else
+        {
+            await Assert.That(problem!).Contains(lasting ? "no NVIDIA GPU" : "may be updating or recovering");
+        }
+    }
+
+    /// <summary>
+    ///     An undo entry that removes a file asks only for the right to remove it: a folder that refuses new files
+    ///     does not block it, while a write there is still blocked. A file that is gone is nothing to do.
+    /// </summary>
+    [Test]
+    public async Task CheckDeletable_AsksOnlyToRemove_NotToAddToTheFolder()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Skip.Test("on Linux, removing a file needs the same folder right as adding one");
+        }
+
+        using TempDir temp = new();
+        Directory.CreateDirectory(temp.Path);
+        string file = temp.Sub("autoexec.cfg");
+        await File.WriteAllTextAsync(file, "echo player");
+        File.SetAttributes(file, FileAttributes.ReadOnly);
+        try
+        {
+            using (Permissions.NoNewFiles(temp.Path))
+            {
+                SafeFile.CheckDeletable(file);
+                SafeFile.CheckDeletable(temp.Sub("gone.cfg"));
+                await Assert.That(() => SafeFile.CheckWritable(file, dryRun: true)).Throws<IOException>();
+            }
+        }
+        finally
+        {
+            File.SetAttributes(file, FileAttributes.Normal);
+        }
     }
 
     [Test]

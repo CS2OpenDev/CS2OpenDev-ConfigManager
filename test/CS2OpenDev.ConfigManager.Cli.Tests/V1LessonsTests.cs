@@ -189,8 +189,10 @@ public class V1LessonsTests
 
     /// <summary>
     ///     v1's elevated rerun judged the backup folder by the elevated account's SID, which refused an organiser's
-    ///     password. acb's administrator's run reads no folder the player owns: it re-checks the archive against the
-    ///     digest it was given, and records only into the administrator's store, which it checks itself.
+    ///     password. acb's administrator's run reads no folder the player owns: it takes the archive's bytes over its
+    ///     pipe and never opens the path it is shown (here a share that does not exist, which it would otherwise sign
+    ///     in to as the administrator), re-checks them against the digest it was given, and records only into the
+    ///     administrator's store, which it checks itself.
     /// </summary>
     [Test]
     public async Task NotAgain_TheAdministratorsRun_TrustsNoFolderThePlayerOwns()
@@ -204,22 +206,32 @@ public class V1LessonsTests
         using TestHost host = new() { Elevation = new ElevationState(ElevationKind.Elevated, "acb runs as an administrator") };
         string zip = FailurePolicyTests.NvidiaArchive(host.Temp);
         string digest = ArchiveReader.Open(zip, new ArchiveReadOptions()).ManifestSha256;
+        const string share = @"\\192.0.2.1\backups\x.zip";
 
-        int swapped = host.Run("__elevated", "restore", zip, "--digest", new string('0', 64), "--only", "nvidia");
+        int unsent = host.Run("__elevated", "restore", zip, "--digest", digest, "--only", "nvidia");
+
+        await Assert.That(unsent).IsEqualTo(ExitCodes.Refused).Because(host.All);
+        await Assert.That(host.Output).Contains("never from a path");
+        await Assert.That(host.MachineStoreChecks).IsEmpty();
+
+        host.ElevatedInput = [File.ReadAllBytes(zip), null];
+        int swapped = host.Run("__elevated", "restore", share, "--digest", new string('0', 64), "--only", "nvidia", "--pipe", "acb-test");
 
         await Assert.That(swapped).IsEqualTo(ExitCodes.Refused).Because(host.All);
         await Assert.That(host.Output).Contains("not the one the first run checked");
         await Assert.That(host.MachineStoreChecks).IsEmpty();
 
         host.MachineStoreProblem = new UnauthorizedAccessException("C:\\ProgramData\\CS2OpenDev is owned by PC\\player, not by administrators");
-        int planted = host.Run("__elevated", "restore", zip, "--digest", digest, "--only", "nvidia");
+        int planted = host.Run("__elevated", "restore", share, "--digest", digest, "--only", "nvidia", "--pipe", "acb-test");
 
         await Assert.That(planted).IsEqualTo(ExitCodes.Refused).Because(host.All);
         await Assert.That(host.MachineStoreChecks.Single()).IsEqualTo(host.MachineStore).Because("the administrator's store, never the player's");
         await Assert.That(Directory.Exists(host.UserStore)).IsFalse().Because("the administrator's run never touches the player's store");
+        await Assert.That(host.Channels[^1].Channel.Sent.Single().Notes.Exists(n => n.Contains(@"is owned by PC\player", StringComparison.Ordinal))).IsTrue()
+            .Because("its report goes back over the pipe");
 
         host.Elevation = new ElevationState(ElevationKind.Credentials, "Windows asks for an administrator's name and password");
-        await Assert.That(host.Run("__elevated", "restore", zip, "--digest", digest, "--only", "nvidia")).IsEqualTo(ExitCodes.Refused)
+        await Assert.That(host.Run("__elevated", "restore", share, "--digest", digest, "--only", "nvidia", "--pipe", "acb-test")).IsEqualTo(ExitCodes.Refused)
             .Because("started without an administrator, it does nothing");
     }
 

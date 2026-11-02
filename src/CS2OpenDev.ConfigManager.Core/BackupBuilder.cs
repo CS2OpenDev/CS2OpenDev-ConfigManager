@@ -79,14 +79,22 @@ public static class BackupBuilder
 
          Everything in here is plain text you can open and read. manifest.json lists every file with its
          SHA-256, and signature.dsse.json names manifest.json's own SHA-256. If any file is changed, added or
-         removed, the restorer refuses the whole backup: make a new one instead of editing this one.
+         removed, the restorer refuses the whole backup: make a new one instead of editing this one. An
+         unsigned (hash level) backup shows only that nothing was damaged or changed by accident: anyone
+         could have edited it and rewritten its manifest.
 
          To check or restore it, use the restorer, acb:
 
-           acb verify <this file>     says who made it, when, and whether anything was changed
-           acb                        walks you through a restore, showing every file before it is written
+           acb verify <this file>     says how it is signed, when it was made, and that its files match
+           acb plan <this file>       says what a restore would change, changing nothing
+           acb restore <this file>    restores it, asking first and recording what it replaces
+           acb undo                   puts the PC back as it was before the restore
 
-         It restores only on {platform}, and keeps a record so `acb undo` can put the PC back.
+         Game state integration files (gamestate_integration_*.cfg), if it carries any, send live game data
+         to the address they name, so a restore writes them only when given --gsi. Give --gsi to acb plan
+         as well, so the plan shows them as written; a restore --plan needs the same --gsi as its plan.
+
+         It restores only on {platform}.
          """;
 
     private static void DeleteQuietly(string dir)

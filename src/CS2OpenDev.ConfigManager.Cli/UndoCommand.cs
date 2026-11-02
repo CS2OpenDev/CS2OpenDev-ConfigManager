@@ -6,8 +6,8 @@ namespace CS2OpenDev.ConfigManager.Cli;
 /// <summary>
 ///     <c>acb undo</c>: puts back what restores changed, from the restorer's own stores only, newest record first,
 ///     with an older record's part waiting while a newer one still holds it. Records are never read from an
-///     archive or a folder the command was given. The administrator's store (NVIDIA settings) is undone by an
-///     elevated run, offered the same way as for a restore.
+///     archive or a folder the command was given. The administrator's store (the sections that need one, NVIDIA's
+///     settings on Windows) is undone by an elevated run, offered the same way as for a restore.
 /// </summary>
 internal static class UndoCommand
 {
@@ -19,6 +19,20 @@ internal static class UndoCommand
             ["id", "only", "set-aside", "steam-path", "report"]);
         line.NoPositionals();
         Output output = new(host, "undo", line.Flag("json"), line.Value("report"));
+        try
+        {
+            return Run(line, host, output);
+        }
+        catch (UndoStoreUnreachableException ex)
+        {
+            // Never "nothing to undo": the records may be there, out of reach.
+            output.Note("Stopped: " + ex.Message + ". Run acb undo again once it can be reached.");
+            return output.Finish(ExitCodes.RecordsNeedAttention);
+        }
+    }
+
+    private static int Run(CommandLine line, AcbHost host, Output output)
+    {
         List<string>? only = Archives.Sections(line.List("only"));
         IReadOnlyList<string>? ids = line.List("id");
         List<string>? userIds = ids is null ? null : [.. ids.Where(i => !i.StartsWith(AdminPrefix, StringComparison.Ordinal))];
@@ -33,12 +47,12 @@ internal static class UndoCommand
 
         if (line.Value("set-aside") is { } setAside)
         {
-            return SetAside(setAside, user, elevated ? machine : null, output);
+            return SetAside(setAside, user, elevated ? machine : null, yes, dryRun, host, output);
         }
 
         if (line.Flag("list"))
         {
-            return List(user, machine, elevated, output);
+            return List(user, machine, elevated, host, output);
         }
 
         IReadOnlyList<UndoRecord> waiting = user.Records();
@@ -59,7 +73,7 @@ internal static class UndoCommand
 
         if (adminWaiting)
         {
-            output.Line("  administrator's records (NVIDIA settings), which an administrator puts back");
+            output.Line($"  administrator's records ({AdminLabels}), which an administrator puts back");
         }
 
         if (!dryRun && !yes)
@@ -86,7 +100,10 @@ internal static class UndoCommand
             SteamRoot = steamPath,
             DryRun = dryRun,
             ProcessCheck = host.IsRunning,
-            OnUnreadable = host.Interactive && !yes ? record => AskUnreadable(record, host) : null
+            LocateSteam = host.LocateSteam,
+            OnUnreadable = host.Interactive && !yes ? record => AskUnreadable(record, "", host) : null,
+            // An administrator's acb writes nothing through the Steam folder, which other users can change.
+            Leave = elevated ? Sections.All.Where(RestoreRules.LeftByAdministrator).ToDictionary(s => s, _ => RestoreCommand.SteamLeftDetail(elevation)) : null
         };
         int exit = ExitCodes.Done;
         if (ids is null || userIds!.Count > 0)
@@ -98,31 +115,38 @@ internal static class UndoCommand
 
         if (adminWaiting && !dryRun)
         {
-            exit = Math.Max(exit, AdminPart(host, elevation, machine!, only, adminIds, steamPath, yes, line.Flag("elevate"), output));
+            bool changed = output.Report.Sections.Any(l => l.Outcome == Outcomes.Done);
+            exit = Math.Max(exit, RestoreCommand.AfterChanges(
+                AdminPart(host, elevation, machine!, only, adminIds, yes, line.Flag("elevate"), output), changed));
         }
 
         output.Line();
+        if (output.Report.Records?.Exists(r => r.State == "set-aside") == true)
+        {
+            output.Note("Records set aside were not put back: the changes they recorded stay on this PC.");
+        }
+
         output.Note(exit switch
         {
             ExitCodes.Done => dryRun ? "Nothing was changed." : "Done: the PC is back as it was before those restores.",
-            ExitCodes.RecordsNeedAttention => "Some records need attention (see above). Nothing they hold was put back, and older records' parts wait for them.",
+            ExitCodes.RecordsNeedAttention => "Some records need attention (see above), and older records' parts wait for them.",
             _ => "Some parts are not put back yet (see above). Run acb undo again once the reason is gone."
         });
         return output.Finish(exit);
     }
 
-    /// <summary>The elevated run of <c>acb undo</c>: the administrator's store only, and no question, since the first run asked.</summary>
+    /// <summary>
+    ///     The elevated run of <c>acb undo</c>: the administrator's store only, and no question, since the first run
+    ///     asked. It takes no Steam folder: the driver's settings need none, and it opens no path a player named.
+    /// </summary>
     public static int Elevated(IReadOnlyList<string> args, AcbHost host)
     {
-        CommandLine line = CommandLine.Parse(args, "undo (administrator)", [], ["only", "id", "steam-path", "pipe"]);
+        CommandLine line = CommandLine.Parse(args, "undo (administrator)", [], ["only", "id", "pipe"]);
         line.NoPositionals();
         Output output = new(host, "undo", json: false, reportPath: null);
+        using IElevatedChannel? channel = line.Value("pipe") is { } pipe ? host.ConnectElevated(pipe) : null;
         int code = ElevatedCore(line, host, output);
-        if (line.Value("pipe") is { } pipe && OperatingSystem.IsWindows())
-        {
-            WindowsElevator.Send(pipe, output.Report);
-        }
-
+        channel?.Send(output.Report);
         return code;
     }
 
@@ -151,15 +175,15 @@ internal static class UndoCommand
         {
             Only = Archives.Sections(line.List("only")),
             Ids = line.List("id") is { } ids ? [.. ids] : null,
-            SteamRoot = line.Value("steam-path"),
-            ProcessCheck = host.IsRunning
+            ProcessCheck = host.IsRunning,
+            LocateSteam = host.LocateSteam
         }, null);
         Report(outcomes, AdminPrefix, output);
         return output.Finish(ExitCodes.For(outcomes));
     }
 
     private static int AdminPart(AcbHost host, ElevationState elevation, UndoStore machine, List<string>? only, List<string>? ids,
-        string? steamPath, bool yes, bool elevate, Output output)
+        bool yes, bool elevate, Output output)
     {
         if (elevation.Kind == ElevationKind.Elevated)
         {
@@ -177,24 +201,34 @@ internal static class UndoCommand
             {
                 Only = only,
                 Ids = ids is { Count: > 0 } ? ids : null,
-                SteamRoot = steamPath,
-                ProcessCheck = host.IsRunning
+                ProcessCheck = host.IsRunning,
+                LocateSteam = host.LocateSteam,
+                OnUnreadable = host.Interactive && !yes ? record => AskUnreadable(record, AdminPrefix, host) : null
             }, null);
             Report(outcomes, AdminPrefix, output);
             return ExitCodes.For(outcomes);
         }
 
+        IReadOnlyList<string> sections = [.. RestoreRules.AdministratorSections.Where(s => only is null || only.Contains(s))];
         if (!elevation.CanAsk)
         {
-            output.Result(Sections.Nvidia, "admin", "left: putting it back needs an administrator, and " + elevation.Detail);
+            foreach (string section in sections)
+            {
+                output.Result(section, Outcomes.Admin, "left: putting it back needs an administrator, and " + elevation.Detail);
+            }
+
             return ExitCodes.PartsLeft;
         }
 
-        if (!(elevate || (!yes && host.Confirm($"The administrator's records (NVIDIA settings) need an administrator. {elevation.Detail}. Ask Windows now?"))))
+        if (!(elevate || (!yes && host.Confirm($"The administrator's records ({AdminLabels}) need an administrator. {elevation.Detail}. Ask Windows now?"))))
         {
-            output.Result(Sections.Nvidia, "admin", yes
-                ? "left: putting it back needs an administrator; pass --elevate to have Windows ask for one"
-                : "left: putting it back needs an administrator");
+            foreach (string section in sections)
+            {
+                output.Result(section, Outcomes.Admin, yes
+                    ? "left: putting it back needs an administrator; pass --elevate to have Windows ask for one"
+                    : "left: putting it back needs an administrator");
+            }
+
             return ExitCodes.PartsLeft;
         }
 
@@ -209,17 +243,33 @@ internal static class UndoCommand
             arguments.AddRange(["--id", id]);
         }
 
-        if (steamPath is not null)
+        ElevatedResult result = host.Elevator.Run(arguments, []);
+        foreach (RecordLine record in result.Report?.Records ?? [])
         {
-            arguments.AddRange(["--steam-path", steamPath]);
+            output.Report.Records!.Add(record);
+            if (record.State == "unreadable")
+            {
+                output.Line(UnreadableLine(record.Name, record.Problem ?? "no reason given", admin: true));
+            }
+            else if (record.State == "set-aside")
+            {
+                output.Line($"  {record.Name}: set aside in {UndoStore.SetAsideFolder}/; what it recorded was not put back");
+            }
         }
 
-        return RestoreCommand.Merge(host.Elevator.Run(arguments), [Sections.Nvidia], output);
+        return RestoreCommand.Merge(result, sections, output, everySection: false);
     }
 
-    private static UnreadableChoice AskUnreadable(UndoRecord record, AcbHost host)
+    /// <summary>What the administrator's records hold, by section label.</summary>
+    private static string AdminLabels => string.Join(", ", RestoreRules.AdministratorSections.Select(Sections.Label));
+
+    private static string UnreadableLine(string name, string problem, bool admin) => admin
+        ? $"  {name}: cannot be read ({problem}); left in place. An administrator can run acb undo --set-aside {name} from an administrator's prompt, so older records go ahead without it"
+        : $"  {name}: cannot be read ({problem}); left in place. acb undo --set-aside {name} lets older records go ahead without it";
+
+    private static UnreadableChoice AskUnreadable(UndoRecord record, string prefix, AcbHost host)
     {
-        host.Out.WriteLine($"Record {record.Name} cannot be read ({record.Problem}). Until it is read or set aside, every older record's parts wait for it.");
+        host.Out.WriteLine($"Record {prefix}{record.Name} cannot be read ({record.Problem}). Until it is read or set aside, every older record's parts wait for it.");
         string? answer = host.Ask("Type r to read it again, s to set it aside (what it recorded is then not put back), or Enter alone to leave it:");
         return answer?.ToUpperInvariant() switch
         {
@@ -244,8 +294,8 @@ internal static class UndoCommand
 
             if (outcome.Unreadable is not null)
             {
-                output.Line($"  {name}: cannot be read ({outcome.Unreadable}); left in place. acb undo --set-aside {name} lets older records go ahead without it");
-                output.Report.Records.Add(new RecordLine(name, null, null, [], "unreadable"));
+                output.Line(UnreadableLine(name, outcome.Unreadable, prefix.Length > 0));
+                output.Report.Records.Add(new RecordLine(name, null, null, [], "unreadable", outcome.Unreadable));
                 continue;
             }
 
@@ -263,7 +313,7 @@ internal static class UndoCommand
 
             foreach (string section in outcome.Waiting)
             {
-                output.Result(section, "left", "waiting: a newer record of the same part has to be put back first");
+                output.Result(section, Outcomes.Left, "waiting: a newer record of the same part has to be put back first");
             }
 
             if (outcome.FileProblem is not null)
@@ -280,7 +330,7 @@ internal static class UndoCommand
     {
         string name = prefix + record.Name;
         string state = !record.IsReadable ? "unreadable" : record.Manifest is null ? "empty" : "waiting";
-        output.Report.Records!.Add(new RecordLine(name, record.Created, record.ArchiveDigest, record.Parts, state));
+        output.Report.Records!.Add(new RecordLine(name, record.Created, record.ArchiveDigest, record.Parts, state, record.IsReadable ? null : record.Problem));
         output.Line(!record.IsReadable
             ? $"  {name}: cannot be read ({record.Problem})"
             : record.Manifest is null
@@ -288,13 +338,26 @@ internal static class UndoCommand
                 : $"  {name}: made {record.Created} from {record.Manifest.Get("archive") ?? "a backup"}; holds {string.Join(", ", record.Parts.Select(Sections.Label))}");
     }
 
-    private static int SetAside(string id, UndoStore user, UndoStore? machine, Output output)
+    /// <summary>
+    ///     Moves a record aside so older records go ahead: one that cannot be read, or one that can, when everything it
+    ///     still holds was written through a Steam folder whose Steam, account or CS2 install is gone, so it does not
+    ///     hold older records back forever, or is an administrator's record of driver settings, which a driver after
+    ///     an update may refuse for good. The second kind is asked about, naming what is then never put back. A dry
+    ///     run says what would be set aside and moves nothing.
+    /// </summary>
+    private static int SetAside(string id, UndoStore user, UndoStore? machine, bool yes, bool dryRun, AcbHost host, Output output)
     {
         bool admin = id.StartsWith(AdminPrefix, StringComparison.Ordinal);
         UndoStore? store = admin ? machine : user;
         if (store is null)
         {
-            return output.Refuse($"{id} is an administrator's record; set it aside from acb run as administrator.");
+            return output.Refuse($"{id} is an administrator's record; an administrator sets it aside, running acb undo --set-aside {id} from an administrator's prompt.");
+        }
+
+        // A dry run never makes the administrator's store; one that is not there holds no record to name.
+        if (admin && !(dryRun && !Directory.Exists(store.Root)) && MachineStoreProblem(store, host) is { } problem)
+        {
+            return output.Refuse("the administrator's store was not used: " + problem);
         }
 
         UndoRecord? record = store.Find(admin ? id[AdminPrefix.Length..] : id);
@@ -305,7 +368,57 @@ internal static class UndoCommand
 
         if (record.IsReadable && record.Parts.Count > 0)
         {
-            return output.Refuse($"{id} can be read, so it is put back with acb undo rather than set aside.");
+            bool driverRecord = admin && record.Parts.All(RestoreRules.NeedsAdministrator);
+            if (!driverRecord)
+            {
+                if (!record.Parts.All(Sections.NeedsSteam))
+                {
+                    return output.Refuse($"{id} can be read, so it is put back with acb undo rather than set aside. A record that can be read is set aside "
+                                         + "only when everything it still holds was written through a Steam folder whose Steam, account or CS2 install is gone, "
+                                         + "or is an administrator's record of NVIDIA settings this driver will not take back.");
+                }
+
+                List<string> stillThere = [.. record.Parts.Where(p => ConfigBackup.StrandedReason(record.Manifest!, p) is null)];
+                if (stillThere.Count > 0)
+                {
+                    return output.Refuse($"{id} can still be put back ({string.Join(", ", stillThere.Select(Sections.Label))}): the Steam folder, account "
+                                         + "and CS2 install its restore wrote to are still there. Run acb undo; a part left for later (CS2 running) goes "
+                                         + "back once CS2 is closed.");
+                }
+
+                foreach (string part in record.Parts)
+                {
+                    output.Line($"  {Sections.Label(part)}: {ConfigBackup.StrandedReason(record.Manifest!, part)}");
+                }
+            }
+
+            output.Line($"{id} can be read. Set aside, what it holds ({string.Join(", ", record.Parts.Select(p => Holds(record, p)))}) is never put back.");
+            if (dryRun)
+            {
+                output.Note("Nothing was changed: a dry run sets nothing aside.");
+                return output.Finish(ExitCodes.Done);
+            }
+
+            if (!yes)
+            {
+                if (!host.Interactive)
+                {
+                    output.Note("Nothing was changed: there is no terminal to ask on. Run it again with --yes to set it aside.");
+                    return output.Finish(ExitCodes.Refused);
+                }
+
+                if (!host.Confirm("Set it aside, so these parts are never put back?"))
+                {
+                    output.Note("Nothing was changed.");
+                    return output.Finish(ExitCodes.Refused);
+                }
+            }
+        }
+
+        if (dryRun)
+        {
+            output.Note($"{id} would be set aside{(record.IsReadable ? "" : $" ({record.Problem})")}; a dry run sets nothing aside.");
+            return output.Finish(ExitCodes.Done);
         }
 
         store.SetAside(record);
@@ -313,7 +426,35 @@ internal static class UndoCommand
         return output.Finish(ExitCodes.Done);
     }
 
-    private static int List(UndoStore user, UndoStore? machine, bool elevated, Output output)
+    /// <summary>A part's label, with the setting ids an NVIDIA part still holds, so the person sees what stays changed.</summary>
+    private static string Holds(UndoRecord record, string section)
+    {
+        if (section != Sections.Nvidia || record.Manifest?.Path(Sections.Nvidia, "cs2", "settings") is not { } settings)
+        {
+            return Sections.Label(section);
+        }
+
+        return Sections.Label(section) + ": " + string.Join(", ", settings.Children.Select(c => c.Key));
+    }
+
+    /// <summary>
+    ///     Checks the administrator's store from its parent down before an administrator's acb reads or moves
+    ///     anything in it, so a folder or link a player made there first is refused; null when it may be used.
+    /// </summary>
+    private static string? MachineStoreProblem(UndoStore machine, AcbHost host)
+    {
+        try
+        {
+            host.EnsureMachineStore(machine.Root, host.MachineStoreParent!);
+            return null;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
+        {
+            return ex.Message;
+        }
+    }
+
+    private static int List(UndoStore user, UndoStore? machine, bool elevated, AcbHost host, Output output)
     {
         output.Report.Records = [];
         IReadOnlyList<UndoRecord> records = user.Records();
@@ -324,7 +465,12 @@ internal static class UndoCommand
         }
 
         bool unreadable = records.Any(r => !r.IsReadable);
-        if (machine is not null && elevated && Directory.Exists(machine.Root))
+        if (machine is not null && elevated && Directory.Exists(machine.Root) && MachineStoreProblem(machine, host) is { } problem)
+        {
+            output.Line("The administrator's records were not read: " + problem);
+            unreadable = true;
+        }
+        else if (machine is not null && elevated && Directory.Exists(machine.Root))
         {
             IReadOnlyList<UndoRecord> admin = machine.Records();
             output.Line(admin.Count == 0 ? "No administrator's records wait." : "Administrator's records in " + machine.Root + ":");
@@ -337,7 +483,7 @@ internal static class UndoCommand
         }
         else if (machine?.HasRecords() == true)
         {
-            output.Line("Administrator's records (NVIDIA settings) wait too; acb run as administrator lists them.");
+            output.Line($"Administrator's records ({AdminLabels}) wait too; acb run as administrator lists them.");
         }
 
         return output.Finish(unreadable ? ExitCodes.RecordsNeedAttention : ExitCodes.Done);

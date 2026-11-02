@@ -9,6 +9,25 @@ namespace CS2OpenDev.ConfigManager.Cli.Tests;
 /// <summary>acb's commands as a person or a script uses them: what they print, what they accept, and their exit codes.</summary>
 public class CommandTests
 {
+    /// <summary>An undo whose store cannot be reached says so with exit 4, never "nothing to undo" with exit 0.</summary>
+    [Test]
+    [Arguments("undo", "--yes")]
+    [Arguments("undo", "--list")]
+    public async Task Undo_WhenTheStoreCannotBeReached_SaysSo_AndExits4(string command, string flag)
+    {
+        using TestHost host = new();
+        Directory.CreateDirectory(host.Temp.Path);
+        int code;
+        using (Permissions.Unlistable(host.Temp.Path))
+        {
+            code = host.Run(command, flag);
+        }
+
+        await Assert.That(code).IsEqualTo(ExitCodes.RecordsNeedAttention).Because(host.All);
+        await Assert.That(host.Output).Contains("cannot be reached");
+        await Assert.That(host.Output).DoesNotContain("Nothing to undo");
+    }
+
     private const string Autoexec = "autoexec.cfg";
 
     [Test]
@@ -24,7 +43,8 @@ public class CommandTests
         await Assert.That(host.Output).Contains("hash (unsigned");
         await Assert.That(host.Output).Contains("Steam account " + FakeSteam.AccountId);
         await Assert.That(host.Output).Contains("cs2game");
-        await Assert.That(host.Output).Contains("Unchanged since it was made");
+        await Assert.That(host.Output).Contains("unsigned: anyone could have edited it").Because("a hash-level backup proves only that its files match its manifest");
+        await Assert.That(host.Output).DoesNotContain("Unchanged since it was made");
         await Assert.That(Directory.Exists(host.UserStore)).IsFalse();
     }
 
@@ -52,7 +72,7 @@ public class CommandTests
         await Assert.That(report.Command).IsEqualTo("verify");
         await Assert.That(report.Level).IsEqualTo("hash");
         await Assert.That(report.ArchiveSha256).IsEqualTo(ArchiveReader.Open(zip, new ArchiveReadOptions()).ManifestSha256);
-        await Assert.That(host.Errors).Contains("Unchanged since it was made");
+        await Assert.That(host.Errors).Contains("anyone could have edited it");
     }
 
     [Test]
@@ -239,6 +259,40 @@ public class CommandTests
         await Assert.That(host.Run("restore", "--plan", plan, "--only", "cs2", "--yes")).IsEqualTo(ExitCodes.Usage);
     }
 
+    /// <summary>
+    ///     A plan made without administrator writes through the Steam folder, which an administrator's acb leaves, so
+    ///     applying it as an administrator is refused for that reason, not as a change to the PC; and the other way round.
+    /// </summary>
+    [Test]
+    public async Task RestorePlan_AtTheOtherKindOfPrompt_SaysSo()
+    {
+        using TestHost host = new();
+        using FakeSteam source = new();
+        using FakeSteam target = new();
+        target.Write(FakeSteam.Cfg(Autoexec), "echo target");
+        string zip = TestArchives.FromSteam(source, host.Temp);
+        string plain = host.Temp.Sub("plain.json");
+        string admin = host.Temp.Sub("admin.json");
+        ElevationState plainPrompt = host.Elevation;
+        ElevationState elevated = new(ElevationKind.Elevated, "acb runs as an administrator");
+        await Assert.That(host.Run("plan", "--only", "cs2game", "--steam-path", target.Root, "--report", plain, zip)).IsEqualTo(ExitCodes.Done).Because(host.All);
+
+        host.Elevation = elevated;
+        await Assert.That(host.Run("plan", "--only", "cs2game", "--steam-path", target.Root, "--report", admin, zip)).IsEqualTo(ExitCodes.PartsLeft).Because(host.All);
+        await Assert.That(host.Run("restore", "--plan", plain, "--yes")).IsEqualTo(ExitCodes.Refused).Because(host.All);
+        await Assert.That(host.Output).Contains("which an administrator's acb leaves");
+        await Assert.That(host.Output).DoesNotContain("changed since the plan was made");
+        await Assert.That(target.Read(FakeSteam.Cfg(Autoexec))).IsEqualTo("echo target");
+
+        host.Elevation = plainPrompt;
+        await Assert.That(host.Run("restore", "--plan", admin, "--yes")).IsEqualTo(ExitCodes.Refused).Because(host.All);
+        await Assert.That(host.Output).Contains("made from an administrator's prompt");
+        await Assert.That(target.Read(FakeSteam.Cfg(Autoexec))).IsEqualTo("echo target");
+
+        await Assert.That(host.Run("restore", "--plan", plain, "--yes")).IsEqualTo(ExitCodes.Done).Because(host.All);
+        await Assert.That(target.Read(FakeSteam.Cfg(Autoexec))).IsEqualTo("echo autoexec\nexec sd_core");
+    }
+
     /// <summary>An organiser types the administrator's password: the elevated run is asked for, and its report becomes this run's.</summary>
     [Test]
     public async Task Restore_Interactive_OffersTheAdministratorsRun_AndReportsIt()
@@ -321,5 +375,156 @@ public class CommandTests
 
         await Assert.That(host.Run("verify", host.Temp.Sub("unzipped"))).IsEqualTo(ExitCodes.Refused);
         await Assert.That(host.Output).Contains("is a folder");
+    }
+
+    /// <summary>
+    ///     --dry-run added to a working restore line stops the changes and nothing else, and with --plan it checks the
+    ///     reviewed plan against the PC without applying it.
+    /// </summary>
+    [Test]
+    public async Task RestoreDryRun_TakesRestoresOptions_AndChecksAReviewedPlan()
+    {
+        using TestHost host = new();
+        using FakeSteam source = new();
+        using FakeSteam target = new();
+        target.Write(FakeSteam.Cfg(Autoexec), "echo target");
+        string zip = TestArchives.FromSteam(source, host.Temp);
+        string plan = host.Temp.Sub("plan.json");
+
+        await Assert.That(host.Run("restore", zip, "--only", "cs2game", "--steam-path", target.Root, "--yes", "--elevate", "--dry-run")).IsEqualTo(ExitCodes.Done).Because(host.All);
+        await Assert.That(host.Run("plan", "--only", "cs2game", "--steam-path", target.Root, "--report", plan, zip)).IsEqualTo(ExitCodes.Done).Because(host.All);
+        await Assert.That(host.Run("restore", "--plan", plan, "--dry-run")).IsEqualTo(ExitCodes.Done).Because(host.All);
+        await Assert.That(host.Output).Contains("still matches the plan");
+
+        target.Write(FakeSteam.Cfg("sd_core.cfg"), "bind mouse5 +changed");
+        await Assert.That(host.Run("restore", "--plan", plan, "--dry-run")).IsEqualTo(ExitCodes.Refused).Because(host.All);
+        await Assert.That(host.Output).Contains("changed since the plan was made");
+        await Assert.That(target.Read(FakeSteam.Cfg(Autoexec))).IsEqualTo("echo target");
+        await Assert.That(host.Records()).IsEmpty();
+    }
+
+    /// <summary>A plan saved by Windows PowerShell 5.1's &gt; (UTF-16) or by a tool that adds a byte order mark is read as acb wrote it.</summary>
+    [Test]
+    [Arguments("utf-16")]
+    [Arguments("utf-8-bom")]
+    public async Task RestorePlan_SavedByAWindowsShell_IsRead(string encoding)
+    {
+        using TestHost host = new();
+        using FakeSteam source = new();
+        using FakeSteam target = new();
+        string zip = TestArchives.FromSteam(source, host.Temp);
+        string plan = host.Temp.Sub("plan.json");
+        await Assert.That(host.Run("plan", "--only", "cs2game", "--steam-path", target.Root, "--report", plan, zip)).IsEqualTo(ExitCodes.Done).Because(host.All);
+        string json = await File.ReadAllTextAsync(plan);
+        await File.WriteAllTextAsync(plan, json, encoding == "utf-16" ? System.Text.Encoding.Unicode : new System.Text.UTF8Encoding(true));
+
+        await Assert.That(host.Run("restore", "--plan", plan, "--yes")).IsEqualTo(ExitCodes.Done).Because(host.All);
+        await Assert.That(target.Read(FakeSteam.Cfg(Autoexec))).IsEqualTo("echo autoexec\nexec sd_core");
+    }
+
+    /// <summary>A plan made by another acb is refused for that reason, before its fields or its fingerprint are compared.</summary>
+    [Test]
+    public async Task RestorePlan_FromAnotherAcbVersion_SaysSo()
+    {
+        using TestHost host = new();
+        using FakeSteam source = new();
+        using FakeSteam target = new();
+        target.Write(FakeSteam.Cfg(Autoexec), "echo target");
+        string zip = TestArchives.FromSteam(source, host.Temp);
+        string plan = host.Temp.Sub("plan.json");
+        await Assert.That(host.Run("plan", "--only", "cs2game", "--steam-path", target.Root, "--report", plan, zip)).IsEqualTo(ExitCodes.Done).Because(host.All);
+        System.Text.Json.Nodes.JsonObject document = System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(plan))!.AsObject();
+        document["acbVersion"] = "9.9.9";
+        document["addedByThatVersion"] = true;
+        await File.WriteAllTextAsync(plan, document.ToJsonString());
+
+        await Assert.That(host.Run("restore", "--plan", plan, "--yes")).IsEqualTo(ExitCodes.Refused).Because(host.All);
+        await Assert.That(host.Output).Contains("made by acb 9.9.9");
+        await Assert.That(target.Read(FakeSteam.Cfg(Autoexec))).IsEqualTo("echo target");
+    }
+
+    /// <summary>
+    ///     Text a backup carries reaches the console with its control characters escaped, so a carriage return or an
+    ///     escape sequence cannot hide or rewrite a line a person reads before they agree.
+    /// </summary>
+    [Test]
+    public async Task Verify_PrintsTheBackupsOwnText_WithControlCharactersEscaped()
+    {
+        using TestHost host = new();
+        string staging = host.Temp.Sub("staging");
+        Directory.CreateDirectory(staging);
+        await File.WriteAllTextAsync(Path.Combine(staging, ArchiveFormat.CaptureEntry), "\"ConfigBackup\"\n{\n\t\"format\"\t\t\"1\"\n}\n");
+        string zip = host.Temp.Sub("forged.zip");
+        ArchiveWriter.Write(staging, zip, new ArchiveContent(ArchiveFormat.CurrentPlatform!, new ArchiveTool("tool\u001b[1A\u001b[2KLevel:    identity", "1"),
+            FakeSteam.AccountId, [new ArchiveSection("cs2", "label\r  cs2       made up", ["note\nextra line"])], "test\n"), DateTimeOffset.UtcNow, CancellationToken.None);
+
+        await Assert.That(host.Run("verify", zip)).IsEqualTo(ExitCodes.Done).Because(host.All);
+
+        await Assert.That(host.Output).Contains("tool\\x1b[1A\\x1b[2KLevel:    identity");
+        await Assert.That(host.Output).Contains("label\\r  cs2");
+        await Assert.That(host.Output).Contains("note\\nextra line");
+        await Assert.That(host.Output).DoesNotContain("\u001b");
+        await Assert.That(host.Output.Replace(Environment.NewLine, "", StringComparison.Ordinal)).DoesNotContain("\r");
+    }
+
+    /// <summary>
+    ///     Launch options with a control character, which Steam's own window cannot enter, are not restored, and the
+    ///     backup says so on the player's own PC.
+    /// </summary>
+    [Test]
+    public async Task Restore_RefusesLaunchOptionsWithAControlCharacter()
+    {
+        using TestHost host = new();
+        using FakeSteam source = new();
+        using FakeSteam target = new(launchOptions: "-target");
+        source.AddAccount(FakeSteam.AccountId, launchOptions: "+exec x\r  would     CS2 launch options: -novid -high");
+        string zip = host.Temp.Sub("cr.zip");
+        await Assert.That(host.Run("backup", "-o", zip, "--only", "launch", "--steam-path", source.Root)).IsEqualTo(ExitCodes.Done).Because(host.All);
+        await Assert.That(host.Output).Contains("a restore will refuse them");
+
+        await Assert.That(host.Run("plan", "--steam-path", target.Root, zip)).IsEqualTo(ExitCodes.PartFailed).Because(host.All);
+        await Assert.That(host.Output).Contains("control character");
+        await Assert.That(host.Run("restore", "--yes", "--steam-path", target.Root, zip)).IsEqualTo(ExitCodes.PartFailed).Because(host.All);
+        await Assert.That(SteamInstall.Locate(target.Root)!.ReadLaunchOptions(FakeSteam.AccountId)).IsEqualTo("-target");
+    }
+
+    /// <summary>A tab, which Steam's localconfig.vdf can hold and the plan prints as \t, does not stop launch options.</summary>
+    [Test]
+    public async Task Restore_TakesLaunchOptionsWithATab()
+    {
+        using TestHost host = new();
+        using FakeSteam source = new();
+        using FakeSteam target = new(launchOptions: "-target");
+        source.AddAccount(FakeSteam.AccountId, launchOptions: "-novid\t-high");
+        string zip = TestArchives.FromSteam(source, host.Temp, Sections.Launch);
+
+        await Assert.That(host.Run("plan", "--steam-path", target.Root, zip)).IsEqualTo(ExitCodes.Done).Because(host.All);
+        await Assert.That(host.Output).Contains("-novid\\t-high");
+        await Assert.That(host.Run("restore", "--yes", "--steam-path", target.Root, zip)).IsEqualTo(ExitCodes.Done).Because(host.All);
+        await Assert.That(SteamInstall.Locate(target.Root)!.ReadLaunchOptions(FakeSteam.AccountId)).IsEqualTo("-novid\t-high");
+    }
+
+    /// <summary>The list of outcomes cannot be changed by code that holds it.</summary>
+    [Test]
+    public async Task Outcomes_AreReadOnly()
+    {
+        await Assert.That(((IList<string>)Outcomes.All).IsReadOnly).IsTrue();
+        await Assert.That(Outcomes.IsKnown(Outcomes.Left)).IsTrue();
+        await Assert.That(Outcomes.IsKnown("DONE")).IsFalse();
+        await Assert.That(Outcomes.IsKnown(null!)).IsFalse();
+    }
+
+    /// <summary>Every outcome a part can have maps to an exit code, and one that is not an outcome never passes as done.</summary>
+    [Test]
+    public async Task EveryOutcome_HasAnExitCode()
+    {
+        foreach (string outcome in Outcomes.All)
+        {
+            await Assert.That(ExitCodes.For(outcome)).IsBetween(ExitCodes.Done, ExitCodes.PartFailed);
+        }
+
+        await Assert.That(ExitCodes.For(Outcomes.Done)).IsEqualTo(ExitCodes.Done);
+        await Assert.That(ExitCodes.For(Outcomes.Left)).IsEqualTo(ExitCodes.PartsLeft);
+        await Assert.That(() => ExitCodes.For("unsupported")).Throws<ArgumentException>();
     }
 }

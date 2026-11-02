@@ -5,23 +5,28 @@ internal static class Acb
 {
     public const string Usage = """
         Usage:
-          acb verify  <backup.zip> [--policy f] [--json]       check it; say who made it, when, and what it holds
+          acb verify  <backup.zip> [--policy f] [--json]       check it; say its trust level, when it was made, what it holds
           acb show    <backup.zip> [--section s | --file p]    list it, or print one part or one file
           acb plan    <backup.zip> [options] [--json]          what a restore would change; changes nothing
           acb restore <backup.zip> [options] [--yes] [--elevate]
-          acb restore --plan plan.json [--yes] [--elevate]     apply exactly a reviewed plan, or refuse if the PC changed
+          acb restore --plan plan.json [--policy f] [--gsi] [--yes] [--elevate]
+                                                           apply exactly a reviewed plan, or refuse if the PC changed
+          acb restore ... --dry-run                        the same checks as a restore, changing nothing
           acb undo    [--list | --id n | --set-aside n] [--only s] [--yes] [--elevate] [--dry-run]
           acb backup  -o <backup.zip> [--only s] [--account id] [--steam-path p] [--gsi]
 
         Options:
           --only a,b         only these sections: cs2, cs2game, launch, input, gamebar, cs2exe, power, nvidia, vibrance
           --account id       the Steam account to restore to (default: the backup's own, once it has signed in here)
-          --steam-path p     the Steam folder (default: found)
+          --steam-path p     the Steam folder (default: found; for undo, the one each restore wrote to)
           --policy f         an organiser's policy file, which can only narrow what is restored
+          --gsi              backup: carry gamestate_integration_*.cfg; plan and restore: write them too (they send
+                             live game data to the address they name, for every account on the PC)
           --yes              do not ask; without a terminal, nothing changes unless this is given
           --elevate          with --yes, let Windows ask for an administrator for the NVIDIA settings
           --json             print the report as JSON on standard output (words go to standard error)
-          --report f         also save the JSON report to f
+          --report f         also save the JSON report to f; a plan's report is the plan file (acb plan b.zip
+                             --report plan.json)
 
         Exit codes: 0 done; 1 refused, nothing changed; 2 done with parts left for later; 3 a part failed and
         was put back; 4 undo records need attention; 64 usage.
@@ -50,11 +55,11 @@ internal static class Acb
                 case "show":
                     return InfoCommands.Show(rest, host);
                 case "plan":
-                    return RestoreCommand.Run(rest, host, dryRun: true);
+                    return RestoreCommand.Run(rest, host, dryRun: true, asRestore: false);
                 case "restore" when rest.Remove("--dry-run"):
-                    return RestoreCommand.Run(rest, host, dryRun: true);
+                    return RestoreCommand.Run(rest, host, dryRun: true, asRestore: true);
                 case "restore":
-                    return RestoreCommand.Run(rest, host, dryRun: false);
+                    return RestoreCommand.Run(rest, host, dryRun: false, asRestore: true);
                 case "undo":
                     return UndoCommand.Run(rest, host);
                 case "backup":

@@ -40,9 +40,13 @@ internal static class InfoCommands
         }
 
         output.Line();
+        // A hash-level backup proves only that its files match its manifest: anyone can rewrite both.
+        string state = archive.Level == TrustLevel.Hash
+            ? "Its files match its manifest, so nothing was damaged or changed by accident. It is unsigned: anyone could have edited it, the account named above included."
+            : "Unchanged since it was made.";
         output.Note(archive.Manifest.Platform == host.Platform
-            ? "Unchanged since it was made. acb restores it on this PC."
-            : $"Unchanged since it was made. It restores only on {archive.Manifest.Platform}, and this PC is {host.Platform ?? "neither Windows x64 nor Linux x64"}.");
+            ? $"{state} acb restores it on this PC."
+            : $"{state} It restores only on {archive.Manifest.Platform}, and this PC is {host.Platform ?? "neither Windows x64 nor Linux x64"}.");
         return output.Finish(ExitCodes.Done);
     }
 
@@ -76,7 +80,7 @@ internal static class InfoCommands
                 return output.Refuse($"the backup holds no {entry}. acb show {path} lists its files.");
             }
 
-            output.Text.Write(ConfigBackup.Text(archive.Read(entry).ToArray()));
+            output.Text.Write(Output.Printable(ConfigBackup.Text(archive.Read(entry).ToArray()), keepLines: true));
             return output.Finish(ExitCodes.Done);
         }
 
@@ -88,7 +92,7 @@ internal static class InfoCommands
             }
 
             output.Line($"{Sections.Label(sectionId)}, as capture.vdf records it:");
-            output.Text.Write(node.ToText());
+            output.Text.Write(Output.Printable(node.ToText(), keepLines: true));
             return output.Finish(ExitCodes.Done);
         }
 
@@ -194,7 +198,7 @@ internal static class InfoCommands
         }
 
         output.Report.Archive = Path.GetFullPath(zip);
-        output.Note("Saved " + output.Report.Archive + (report.Count("failed") > 0 ? ", without the parts that failed above." : "."));
-        return output.Finish(report.Count("failed") > 0 ? ExitCodes.PartsLeft : ExitCodes.Done);
+        output.Note("Saved " + output.Report.Archive + (report.Count(Outcomes.Failed) > 0 ? ", without the parts that failed above." : "."));
+        return output.Finish(report.Count(Outcomes.Failed) > 0 ? ExitCodes.PartsLeft : ExitCodes.Done);
     }
 }

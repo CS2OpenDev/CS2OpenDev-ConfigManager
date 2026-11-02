@@ -3,7 +3,7 @@ using CS2OpenDev.ConfigManager.Kit;
 namespace CS2OpenDev.ConfigManager.Restoring;
 
 /// <summary>What to do with a record that cannot be read.</summary>
-public enum UnreadableChoice
+internal enum UnreadableChoice
 {
     /// <summary>Keep it where it is; it holds back every older record's parts. The safe default.</summary>
     Leave,
@@ -15,7 +15,7 @@ public enum UnreadableChoice
     SetAside
 }
 
-public sealed record UndoRunOptions
+internal sealed record UndoRunOptions
 {
     /// <summary>Sections to put back; null for every one.</summary>
     public ICollection<string>? Only { get; init; }
@@ -23,18 +23,25 @@ public sealed record UndoRunOptions
     /// <summary>Records to apply, by name or sequence; null for every one. Records not named still hold back older ones.</summary>
     public ICollection<string>? Ids { get; init; }
 
+    /// <summary>Steam's folder; null uses the one each record was restored into, as it recorded.</summary>
     public string? SteamRoot { get; init; }
 
     public bool DryRun { get; init; }
 
     public Func<string, bool>? ProcessCheck { get; init; }
 
+    /// <summary>Finds Steam; null uses <see cref="SteamInstall.Locate" />. See <see cref="RestoreOptions.LocateSteam" />.</summary>
+    public Func<string?, SteamInstall?>? LocateSteam { get; init; }
+
+    /// <summary>Sections this run leaves in every record, each with the reason it reports; they hold back older records too.</summary>
+    public IReadOnlyDictionary<string, string>? Leave { get; init; }
+
     /// <summary>Asked about each unreadable record; null leaves every one, as a headless run does.</summary>
     public Func<UndoRecord, UnreadableChoice>? OnUnreadable { get; init; }
 }
 
 /// <summary>How one record went in an undo run.</summary>
-public sealed class RecordOutcome
+internal sealed class RecordOutcome
 {
     internal RecordOutcome(UndoRecord record) => Record = record;
 
@@ -66,7 +73,7 @@ public sealed class RecordOutcome
 ///     while a newer record still holds the same part (it failed, was left for later, was not chosen, or the newer
 ///     record cannot be read): the older record is what the PC had first, so it goes back last.
 /// </summary>
-public static class UndoRunner
+internal static class UndoRunner
 {
     public static IReadOnlyList<RecordOutcome> Run(UndoStore store, UndoRunOptions options, TextWriter? log)
     {
@@ -127,16 +134,23 @@ public static class UndoRunner
             }
 
             IEnumerable<string> wanted = options.Only ?? Sections.All;
-            List<string> only = [.. wanted.Where(s => !heldBack.Contains(s))];
+            List<string> only = [.. wanted.Where(s => !heldBack.Contains(s) && options.Leave?.ContainsKey(s) != true)];
             RestoreOptions restoreOptions = new()
             {
                 Only = only,
-                SteamRoot = options.SteamRoot,
+                // Back into the Steam the restore wrote to, which may not be the one this PC would find first.
+                SteamRoot = options.SteamRoot ?? record.Manifest.Get("steam"),
                 WriteUndo = false,
                 DryRun = options.DryRun,
-                ProcessCheck = options.ProcessCheck
+                ProcessCheck = options.ProcessCheck,
+                LocateSteam = options.LocateSteam
             };
             RunReport report = ConfigBackup.Restore(new FolderSource(record.Dir, record.Manifest), RestoreMode.Undo, restoreOptions, log);
+            foreach (string part in record.Parts.Where(p => options.Leave?.ContainsKey(p) == true && !heldBack.Contains(p) && wanted.Contains(p)))
+            {
+                report.Results.Add(new SectionResult(part, Outcomes.Deferred, options.Leave![part]));
+            }
+
             outcome.Report = report;
             outcome.Left = report.PendingParts;
             outcome.Waiting = [.. outcome.Left.Where(heldBack.Contains)];

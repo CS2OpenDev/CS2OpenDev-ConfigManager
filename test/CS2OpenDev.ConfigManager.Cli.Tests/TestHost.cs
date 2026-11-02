@@ -13,12 +13,30 @@ internal sealed class FakeElevator : IElevator
 {
     public List<IReadOnlyList<string>> Calls { get; } = [];
 
+    /// <summary>What each call would have sent the elevated run over its pipe.</summary>
+    public List<IReadOnlyList<byte[]?>> Inputs { get; } = [];
+
     public ElevatedResult Answer { get; set; } = new(Declined: true, ExitCodes.PartsLeft, null, "the Windows prompt was cancelled or refused");
 
-    public ElevatedResult Run(IReadOnlyList<string> arguments)
+    public ElevatedResult Run(IReadOnlyList<string> arguments, IReadOnlyList<byte[]?> input)
     {
         Calls.Add(arguments);
+        Inputs.Add(input);
         return Answer;
+    }
+}
+
+/// <summary>The elevated run's pipe in a test: the input it is given, and the reports it sends back.</summary>
+internal sealed class FakeChannel(IReadOnlyList<byte[]?>? input) : IElevatedChannel
+{
+    public IReadOnlyList<byte[]?>? Input { get; } = input;
+
+    public List<CommandReport> Sent { get; } = [];
+
+    public void Send(CommandReport report) => Sent.Add(report);
+
+    public void Dispose()
+    {
     }
 }
 
@@ -45,12 +63,32 @@ internal sealed class TestHost : IDisposable
 
     public FakeElevator Elevator { get; } = new();
 
+    /// <summary>What an elevated run started with --pipe reads from the first run; null when nothing answers.</summary>
+    public IReadOnlyList<byte[]?>? ElevatedInput { get; set; }
+
+    /// <summary>The channels elevated runs opened, by pipe name.</summary>
+    public List<(string Pipe, FakeChannel Channel)> Channels { get; } = [];
+
     /// <summary>Thrown by the machine store check, standing in for a folder a player made first.</summary>
     public Exception? MachineStoreProblem { get; set; }
 
     public List<string> MachineStoreChecks { get; } = [];
 
     public Action<string>? BeforeRollback { get; set; }
+
+    /// <summary>
+    ///     Starts NVIDIA's driver API for the engine. By default the real one, whose failure is taken as one that may
+    ///     pass, so the administrator's flow is the same on a PC with the driver and on one without (CI).
+    /// </summary>
+    public NvidiaStarter StartNvidia { get; set; } = (out bool mayPass) =>
+    {
+        string? why = NvidiaDrs.Initialize(out _);
+        mayPass = true;
+        return why!;
+    };
+
+    /// <summary>How long the engine waits for an NVIDIA driver part.</summary>
+    public int DriverTimeoutMs { get; set; } = ConfigBackup.DriverPartTimeoutMs;
 
     public string UserStore => Temp.Sub("user-store");
 
@@ -65,9 +103,12 @@ internal sealed class TestHost : IDisposable
     /// <summary>Everything acb wrote, for a failure message.</summary>
     public string All => _out + Environment.NewLine + _err;
 
-    public int Run(params string[] args)
+    public int Run(params string[] args) => Acb.Run(args, Host());
+
+    /// <summary>The host acb runs with: this test's console, stores, stand-ins and fake Steam.</summary>
+    public AcbHost Host()
     {
-        AcbHost host = new()
+        return new AcbHost
         {
             Out = _out,
             Err = _err,
@@ -78,8 +119,18 @@ internal sealed class TestHost : IDisposable
             MachineStoreRoot = MachineStore,
             MachineStoreParent = MachineParent,
             IsRunning = Running.Contains,
+            // A test that names no Steam folder fails here rather than reaching this PC's own Steam.
+            LocateSteam = root => root is null
+                ? throw new InvalidOperationException("acb looked for this PC's own Steam; a test names its fake Steam folder.")
+                : SteamInstall.Locate(root),
             Elevation = () => Elevation,
             Elevator = Elevator,
+            ConnectElevated = pipe =>
+            {
+                FakeChannel channel = new(ElevatedInput);
+                Channels.Add((pipe, channel));
+                return channel;
+            },
             Now = () => new DateTimeOffset(2026, 11, 1, 18, 0, 0, TimeSpan.Zero),
             EnsureMachineStore = (root, parent) =>
             {
@@ -91,9 +142,10 @@ internal sealed class TestHost : IDisposable
 
                 Directory.CreateDirectory(root);
             },
-            BeforeRollback = BeforeRollback
+            BeforeRollback = BeforeRollback,
+            StartNvidia = StartNvidia,
+            DriverTimeoutMs = DriverTimeoutMs
         };
-        return Acb.Run(args, host);
     }
 
     /// <summary>The undo records waiting in the player's store.</summary>

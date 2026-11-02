@@ -8,54 +8,12 @@ namespace CS2OpenDev.ConfigManager.Cli;
 /// <summary>Opening archives and policies the one way every command does, and naming what they say.</summary>
 internal static class Archives
 {
-    /// <summary>
-    ///     Opens and verifies a v2 archive; null with <paramref name="problem" /> set when it is refused. A folder is
-    ///     not an archive: v1's unzipped backups ran their own scripts, and acb reads only what ArchiveReader checks.
-    /// </summary>
-    public static VerifiedArchive? Open(string path, string? requirePlatform, TrustLevel minimumLevel, out string? problem)
-    {
-        problem = null;
-        if (Directory.Exists(path))
-        {
-            problem = $"{path} is a folder. acb reads a backup file (.zip) as it was made; an unzipped backup is not checked or restored.";
-            return null;
-        }
-
-        try
-        {
-            return ArchiveReader.Open(path, new ArchiveReadOptions { RequirePlatform = requirePlatform, MinimumLevel = minimumLevel });
-        }
-        catch (ArchiveRejectedException ex)
-        {
-            problem = ex.Message;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            problem = $"{path} cannot be read: {ex.Message}";
-        }
-
-        return null;
-    }
+    /// <summary>Opens and verifies a v2 archive; null with <paramref name="problem" /> set when it is refused. See <see cref="RestoreSession.OpenArchive(string, string?, TrustLevel, out string?)" />.</summary>
+    public static VerifiedArchive? Open(string path, string? requirePlatform, TrustLevel minimumLevel, out string? problem) =>
+        RestoreSession.OpenArchive(path, requirePlatform, minimumLevel, out problem);
 
     /// <summary>Loads a policy file; null with <paramref name="problem" /> set when it is refused, or when none was given.</summary>
-    public static OrganiserPolicy? Policy(string? path, out string? problem)
-    {
-        problem = null;
-        if (path is null)
-        {
-            return null;
-        }
-
-        try
-        {
-            return OrganiserPolicy.Load(path);
-        }
-        catch (PolicyException ex)
-        {
-            problem = ex.Message;
-            return null;
-        }
-    }
+    public static OrganiserPolicy? Policy(string? path, out string? problem) => RestoreSession.LoadPolicy(path, out problem);
 
     /// <summary>Section names from --only, each checked: a misspelt one is a usage error, never a silent "nothing".</summary>
     public static List<string>? Sections(IReadOnlyList<string>? names)
@@ -78,7 +36,7 @@ internal static class Archives
 
     public static string LevelText(TrustLevel level) => level switch
     {
-        TrustLevel.Hash => "hash (unsigned: it proves the files are unchanged since the backup was made, not who made it)",
+        TrustLevel.Hash => "hash (unsigned: anyone could have edited this; it shows only that the files match the manifest)",
         TrustLevel.Seal => "seal (sealed with a passphrase)",
         _ => "identity (signed for a Steam account)"
     };

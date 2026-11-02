@@ -8,7 +8,7 @@ namespace CS2OpenDev.ConfigManager.Restoring;
 ///     files, all from the bytes the reader checked. Nothing is unpacked, so no folder anyone else could write
 ///     stands between the check and the write.
 /// </summary>
-public sealed class ArchiveSource : IBackupSource
+internal sealed class ArchiveSource : IBackupSource
 {
     private readonly VerifiedArchive _archive;
 

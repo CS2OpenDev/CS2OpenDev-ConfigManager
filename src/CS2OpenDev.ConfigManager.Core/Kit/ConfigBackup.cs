@@ -1,9 +1,10 @@
 #nullable disable
-#pragma warning disable
+#pragma warning disable CA1068, CA1720, CA1825, CA1846, CA1850, CA1854, CA1865, CA2249
 // v1's C# 5 style; see the header of KeyValues.cs.
 
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Security.Cryptography;
@@ -71,9 +72,10 @@ namespace CS2OpenDev.ConfigManager.Kit
             }
         }
 
-        /// <summary>Sections read from or written to the Steam folder or the CS2 install.</summary>
+        /// <summary>Sections read from or written to the Steam folder or the CS2 install. A name that is not a section throws.</summary>
         public static bool NeedsSteam(string section)
         {
+            Scope(section);
             return section == Cs2 || section == Cs2Game || section == Launch || section == Cs2Exe;
         }
 
@@ -171,7 +173,7 @@ namespace CS2OpenDev.ConfigManager.Kit
     ///     from the command the person ran, never from the record being applied: v1 read it from the manifest, so a
     ///     backup that called itself an undo skipped the restore's path rules.
     /// </summary>
-    public enum RestoreMode
+    internal enum RestoreMode
     {
         Restore,
         Undo
@@ -181,7 +183,7 @@ namespace CS2OpenDev.ConfigManager.Kit
     ///     What a restore applies: the capture record and the bytes of the files it lists. A verified archive
     ///     serves both from memory, so nothing a restore writes is read back from a folder someone could change.
     /// </summary>
-    public interface IBackupSource
+    internal interface IBackupSource
     {
         /// <summary>The capture record (a backup's capture.vdf, an undo record's backup.vdf).</summary>
         KvNode Manifest { get; }
@@ -194,7 +196,7 @@ namespace CS2OpenDev.ConfigManager.Kit
     }
 
     /// <summary>A capture or undo record kept as a folder: backup.vdf beside a files tree.</summary>
-    public sealed class FolderSource : IBackupSource
+    internal sealed class FolderSource : IBackupSource
     {
         private readonly string _dir;
 
@@ -244,12 +246,16 @@ namespace CS2OpenDev.ConfigManager.Kit
         }
     }
 
+    /// <summary>Starts the NVIDIA driver's API: null once it is up, otherwise why not, and whether that may pass.</summary>
+    internal delegate string NvidiaStarter(out bool mayPass);
+
     /// <summary>What to restore.</summary>
-    public sealed class RestoreOptions
+    internal sealed class RestoreOptions
     {
         public RestoreOptions()
         {
             WriteUndo = true;
+            DriverTimeoutMs = ConfigBackup.DriverPartTimeoutMs;
         }
 
         /// <summary>The sections to restore; null restores every section the backup holds.</summary>
@@ -257,7 +263,7 @@ namespace CS2OpenDev.ConfigManager.Kit
 
         public string SteamRoot { get; set; }
 
-        /// <summary>The account to write CS2 settings to; null picks one (see <see cref="ConfigBackup.ResolveAccount" />).</summary>
+        /// <summary>The account to write CS2 settings to; null picks one (see <see cref="ConfigBackup.ResolveAccount(SteamInstall, string, string)" />).</summary>
         public string AccountId { get; set; }
 
         /// <summary>Record what is replaced so Undo can put it back.</summary>
@@ -281,14 +287,37 @@ namespace CS2OpenDev.ConfigManager.Kit
         /// </summary>
         public bool SkipProcessChecks { get; set; }
 
+        /// <summary>Also write the gamestate_integration_*.cfg files the backup carries; they are left alone unless asked for.</summary>
+        public bool IncludeGameStateIntegration { get; set; }
+
         /// <summary>NVIDIA setting ids a restore leaves alone, from an organiser's policy. An undo puts back every id it recorded.</summary>
         public ICollection<uint> NvidiaDeny { get; set; }
+
+        /// <summary>
+        ///     Files a restore leaves as the target has them, each as "section/relative" (cs2/local/cfg/x.vcfg). A
+        ///     .vcfg and its _lastclouded twin are one choice, so a pair is never split. An undo puts back every file
+        ///     it recorded.
+        /// </summary>
+        public ICollection<string> LeaveFiles { get; set; }
 
         /// <summary>Whether a process of that name runs; null asks Windows or Linux. Tests stand in for a running CS2.</summary>
         public Func<string, bool> ProcessCheck { get; set; }
 
+        /// <summary>
+        ///     Finds Steam from <see cref="SteamRoot" />, or on the PC when that is null; null uses
+        ///     <see cref="SteamInstall.Locate" />. acb's tests pass one that refuses to look on the PC, so a test that
+        ///     names no Steam folder fails instead of reaching the real one.
+        /// </summary>
+        public Func<string, SteamInstall> LocateSteam { get; set; }
+
         /// <summary>Called with the record's folder just before a failed part is rolled back. Tests only.</summary>
         internal Action<string> BeforeRollback { get; set; }
+
+        /// <summary>Starts NVAPI; null uses <see cref="NvidiaDrs.Initialize(out bool)" />. Tests stand in for a PC without the driver.</summary>
+        internal NvidiaStarter StartNvidia { get; set; }
+
+        /// <summary>How long a part that calls into the NVIDIA driver may take. Tests shorten it.</summary>
+        internal int DriverTimeoutMs { get; set; }
 
         internal bool IsRunning(string processName)
         {
@@ -301,11 +330,94 @@ namespace CS2OpenDev.ConfigManager.Kit
         }
     }
 
+    /// <summary>
+    ///     The outcomes a part can have, the only ones a result may carry: a misspelt or new one throws where it is
+    ///     made, rather than passing as done.
+    /// </summary>
+    public static class Outcomes
+    {
+        public const string Done = "done";
+
+        /// <summary>Nothing to do.</summary>
+        public const string Skipped = "skipped";
+
+        /// <summary>Not now, for a reason that passes, such as CS2 running.</summary>
+        public const string Deferred = "deferred";
+
+        /// <summary>A target cannot be written, so nothing of the part was.</summary>
+        public const string Blocked = "blocked";
+
+        public const string Failed = "failed";
+
+        /// <summary>Needs an administrator.</summary>
+        public const string Admin = "admin";
+
+        /// <summary>An undo's part waiting for a newer record of the same part.</summary>
+        public const string Left = "left";
+
+        private static readonly string[] all = { Done, Skipped, Deferred, Blocked, Failed, Admin, Left };
+
+        /// <summary>Every outcome, read-only so no code in the process can change which outcomes are valid.</summary>
+        public static readonly ReadOnlyCollection<string> All = new ReadOnlyCollection<string>(all);
+
+        /// <summary>Whether <paramref name="outcome" /> is one of <see cref="All" />, compared ordinally.</summary>
+        public static bool IsKnown(string outcome)
+        {
+            return outcome != null && Array.IndexOf(all, outcome) >= 0;
+        }
+
+        /// <summary>Whether the part is finished: done, or nothing to do.</summary>
+        public static bool IsSettled(string outcome)
+        {
+            return outcome == Done || outcome == Skipped;
+        }
+    }
+
+    /// <summary>
+    ///     Stands between a driver part's worker and its first change. Once the run gives up on the worker, one that
+    ///     has not changed anything yet never does, so the run knows whether the part may have changed the PC.
+    /// </summary>
+    internal sealed class DriverGate
+    {
+        private readonly object _lock = new object();
+        private bool _givenUp;
+        private bool _started;
+
+        /// <summary>Called by the worker before each change; throws when the run gave up on it before its first.</summary>
+        public void Enter()
+        {
+            lock (_lock)
+            {
+                if (_givenUp && !_started)
+                {
+                    throw new OperationCanceledException("the run gave up on this part before it changed anything");
+                }
+
+                _started = true;
+            }
+        }
+
+        /// <summary>Called by the run when it gives up on the worker: whether the worker may have changed something.</summary>
+        public bool GiveUp()
+        {
+            lock (_lock)
+            {
+                _givenUp = true;
+                return _started;
+            }
+        }
+    }
+
     /// <summary>How one section went.</summary>
     public sealed class SectionResult
     {
         public SectionResult(string section, string outcome, string detail)
         {
+            if (!Outcomes.IsKnown(outcome))
+            {
+                throw new ArgumentException("Not an outcome: " + outcome);
+            }
+
             Section = section;
             Outcome = outcome;
             Detail = detail;
@@ -360,6 +472,16 @@ namespace CS2OpenDev.ConfigManager.Kit
         /// </summary>
         public List<string> Observed { get; private set; } = new List<string>();
 
+        /// <summary>
+        ///     Driver parts given up on after their worker may have started changing the PC, so what they changed is
+        ///     not known. The worker may be cut off at any point, by process exit too; every driver write is recorded
+        ///     before it is made, so their record covers whatever they changed, for acb undo.
+        /// </summary>
+        public List<string> Unknown { get; private set; } = new List<string>();
+
+        /// <summary>On a driver part's own report: what its worker passes before each change.</summary>
+        internal DriverGate Gate { get; set; }
+
         /// <summary>For an undo, the snapshot's parts still to be put back.</summary>
         public List<string> PendingParts { get; private set; }
 
@@ -375,7 +497,7 @@ namespace CS2OpenDev.ConfigManager.Kit
             {
                 foreach (SectionResult r in Results)
                 {
-                    if (r.Outcome == "admin")
+                    if (r.Outcome == Outcomes.Admin)
                     {
                         return true;
                     }
@@ -422,8 +544,21 @@ namespace CS2OpenDev.ConfigManager.Kit
         public const string RootKey = "ConfigBackup";
         private const long MaxFileBytes = 4L * 1024 * 1024;
 
+        /// <summary>
+        ///     In an undo record's file part, the SHA-256 of each file as the restore left it, for showing whether it
+        ///     changed since. An undo reads only the part's "files".
+        /// </summary>
+        public const string WroteKey = "wrote";
+
         /// <summary>CS2's video settings; restored by merging so the target keeps what describes its own hardware.</summary>
         public const string VideoFile = "cs2_video.txt";
+
+        /// <summary>
+        ///     Set by the test assemblies when they load: a restore, undo or rollback that would write a Windows or
+        ///     driver section throws before its first read or write, and looking for this PC's own Steam throws, so a
+        ///     test can never change the PC it runs on.
+        /// </summary>
+        internal static bool MachineWritesRefused { get; set; }
 
         /// <summary>The keys in cs2_video.txt that describe the GPU and monitor rather than the player's choices.</summary>
         public static readonly string[] VideoHardwareKeys = { "VendorID", "DeviceID", "setting.monitor_index", "setting.knowndevice", "Autoconfig" };
@@ -447,7 +582,7 @@ namespace CS2OpenDev.ConfigManager.Kit
         {
             string path = relative.Replace('\\', '/');
             string name = path.Substring(path.LastIndexOf('/') + 1);
-            if (!path.StartsWith("local/cfg/", StringComparison.OrdinalIgnoreCase) || path.IndexOf('/', 10) >= 0)
+            if (!IsPlainPath(path) || !path.StartsWith("local/cfg/", StringComparison.OrdinalIgnoreCase) || path.IndexOf('/', 10) >= 0)
             {
                 return false;
             }
@@ -469,7 +604,7 @@ namespace CS2OpenDev.ConfigManager.Kit
         {
             string path = relative.Replace('\\', '/');
             string name = path.Substring(path.LastIndexOf('/') + 1).ToLowerInvariant();
-            if (path.StartsWith("devonly/", StringComparison.OrdinalIgnoreCase) || !name.EndsWith(".cfg", StringComparison.Ordinal))
+            if (!IsPlainPath(path) || path.StartsWith("devonly/", StringComparison.OrdinalIgnoreCase) || !name.EndsWith(".cfg", StringComparison.Ordinal))
             {
                 return false;
             }
@@ -484,6 +619,54 @@ namespace CS2OpenDev.ConfigManager.Kit
             return includeGameStateIntegration || !name.StartsWith("gamestate_integration_", StringComparison.Ordinal);
         }
 
+        /// <summary>
+        ///     Whether no name in a path is empty or ends in a dot or space, which Windows drops, so such a name would
+        ///     be judged by these rules as one file and written as another.
+        /// </summary>
+        private static bool IsPlainPath(string path)
+        {
+            foreach (string part in path.Split('/'))
+            {
+                if (part.Length == 0 || part.EndsWith(".", StringComparison.Ordinal) || part.EndsWith(" ", StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        ///     Whether a name in a path could be a Windows 8.3 alias, which opens another file (GAMEST~1.CFG for
+        ///     gamestate_integration_x.cfg): at most eight characters, a dot and three, with a tilde and a digit, as
+        ///     Windows makes them. Setting one by hand needs an administrator's restore privilege. Only names from a
+        ///     backup are judged this way; capture reads the folder's own long names.
+        /// </summary>
+        private static bool MayBeAlias(string path)
+        {
+            foreach (string part in path.Split('/'))
+            {
+                int dot = part.IndexOf('.');
+                bool shortShape = dot < 0
+                    ? part.Length <= 8
+                    : dot <= 8 && part.Length - dot - 1 <= 3 && part.IndexOf('.', dot + 1) < 0;
+                if (!shortShape)
+                {
+                    continue;
+                }
+
+                for (int i = 0; i + 1 < part.Length; i++)
+                {
+                    if (part[i] == '~' && part[i + 1] >= '0' && part[i + 1] <= '9')
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
         /// <summary>Whether a path in game/csgo/cfg is server.cfg itself, which a backup carries only once the player edited it.</summary>
         public static bool IsServerCfg(string relative)
         {
@@ -492,16 +675,49 @@ namespace CS2OpenDev.ConfigManager.Kit
 
         /// <summary>
         ///     Whether a backup may write this path of a file part: the same rules capture uses, so neither an older
-        ///     backup nor a hand-edited one reaches Steam Cloud's remote/ folder or Valve's own cfg files.
+        ///     backup nor a hand-edited one reaches Steam Cloud's remote/ folder or Valve's own cfg files. A
+        ///     gamestate_integration_*.cfg sends live game data to the address it names for every account on the
+        ///     PC, so it is written only when the restore was asked to. A name that could be an 8.3 alias is never written.
         /// </summary>
-        public static bool IsRestorablePath(string section, string relative)
+        public static bool IsRestorablePath(string section, string relative, bool includeGameStateIntegration)
         {
+            if (MayBeAlias((relative ?? "").Replace('\\', '/')))
+            {
+                return false;
+            }
+
             if (section == Sections.Cs2)
             {
                 return IsAccountSetting(relative);
             }
 
-            return section == Sections.Cs2Game && (IsPlayerCfg(relative, true) || IsServerCfg(relative));
+            return section == Sections.Cs2Game && (IsPlayerCfg(relative, includeGameStateIntegration) || IsServerCfg(relative));
+        }
+
+        /// <summary>Whether a path in game/csgo/cfg is a game state integration file.</summary>
+        public static bool IsGameStateIntegration(string relative)
+        {
+            string path = (relative ?? "").Replace('\\', '/');
+            return path.Substring(path.LastIndexOf('/') + 1).StartsWith("gamestate_integration_", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Whether a capture record's value for a file is a SHA-256 (64 lowercase hex digits), the only value capture writes.</summary>
+        private static bool IsSha256Hex(string value)
+        {
+            if (value == null || value.Length != 64)
+            {
+                return false;
+            }
+
+            foreach (char c in value)
+            {
+                if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /// <summary>Whether a server.cfg holds nothing but comments and blank lines, as Valve ships it.</summary>
@@ -573,7 +789,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                         Directory.Delete(staged, true);
                     }
 
-                    report.Add(log, section, "failed", ex.Message + "; nothing from this part is in the backup");
+                    report.Add(log, section, Outcomes.Failed, ex.Message + "; nothing from this part is in the backup");
                 }
             }
 
@@ -586,7 +802,11 @@ namespace CS2OpenDev.ConfigManager.Kit
 
         private static readonly object DriverWorkerLock = new object();
 
-        private static Thread _driverWorker;
+        /// <summary>The last worker given up on (timed out or cancelled), or null.</summary>
+        private static Thread _abandonedWorker;
+
+        /// <summary>The last worker started, or null; a new one waits for it, so one thread at a time is in the driver.</summary>
+        private static Thread _currentWorker;
 
         /// <summary>
         ///     Captures a part that calls into the NVIDIA driver on a worker of its own, writing into a manifest
@@ -605,7 +825,7 @@ namespace CS2OpenDev.ConfigManager.Kit
             }, options.Cancellation, DriverPartTimeoutMs, out error);
             if (why != null)
             {
-                report.Add(log, section, "failed", why);
+                report.Add(log, section, Outcomes.Failed, why);
                 return;
             }
 
@@ -626,10 +846,19 @@ namespace CS2OpenDev.ConfigManager.Kit
             }
         }
 
+        private static void GiveUp(Thread worker)
+        {
+            lock (DriverWorkerLock)
+            {
+                _abandonedWorker = worker;
+            }
+        }
+
         /// <summary>
         ///     Runs <paramref name="body" /> on a background thread and waits for it while watching for a cancel.
         ///     Null once it finished, with what it threw in <paramref name="error" />; otherwise why it was given
-        ///     up on, and the thread is left to finish alone. While a thread given up on is still running no
+        ///     up on, and the thread is left to finish alone. One thread at a time is in the driver: a call waits,
+        ///     within its own limit, for one still running. While a thread given up on is still running no
         ///     second one starts, since a driver that hung once is likely to hang again.
         /// </summary>
         public static string RunOnDriverWorker(ThreadStart body, CancellationToken cancellation, int timeoutMs, out Exception error)
@@ -637,41 +866,67 @@ namespace CS2OpenDev.ConfigManager.Kit
             error = null;
             Exception thrown = null;
             Thread worker;
-            lock (DriverWorkerLock)
+            int waited = 0;
+            while (true)
             {
-                if (_driverWorker != null && _driverWorker.IsAlive)
+                Thread busy;
+                lock (DriverWorkerLock)
                 {
-                    return "an earlier call into the NVIDIA driver has not returned; restart DemoViewer to try again";
+                    if (_abandonedWorker != null && _abandonedWorker.IsAlive)
+                    {
+                        return "an earlier call into the NVIDIA driver has not returned; close the program and start it again to try again";
+                    }
+
+                    busy = _currentWorker != null && _currentWorker.IsAlive ? _currentWorker : null;
+                    if (busy == null)
+                    {
+                        worker = new Thread(new ThreadStart(delegate
+                        {
+                            try
+                            {
+                                body();
+                            }
+                            catch (Exception ex)
+                            {
+                                thrown = ex;
+                            }
+                        }));
+                        worker.IsBackground = true;
+                        worker.Name = "Advanced Config Backup driver call";
+                        worker.Start();
+                        _currentWorker = worker;
+                        break;
+                    }
                 }
 
-                worker = new Thread(new ThreadStart(delegate
+                // Nothing was started for this call, so there is nothing to give up on.
+                if (!busy.Join(100))
                 {
-                    try
+                    waited += 100;
+                    if (cancellation.IsCancellationRequested)
                     {
-                        body();
+                        return "cancelled while waiting for the NVIDIA driver";
                     }
-                    catch (Exception ex)
+
+                    if (waited >= timeoutMs)
                     {
-                        thrown = ex;
+                        return "the NVIDIA driver was busy with another call for " + Inv.S(timeoutMs / 1000) + " seconds";
                     }
-                }));
-                worker.IsBackground = true;
-                worker.Name = "Advanced Config Backup driver call";
-                _driverWorker = worker;
-                worker.Start();
+                }
             }
 
-            int waited = 0;
             while (!worker.Join(100))
             {
                 waited += 100;
                 if (cancellation.IsCancellationRequested)
                 {
+                    GiveUp(worker);
                     return "cancelled while waiting for the NVIDIA driver";
                 }
 
                 if (waited >= timeoutMs)
                 {
+                    GiveUp(worker);
                     return "the NVIDIA driver did not answer within " + Inv.S(timeoutMs / 1000) + " seconds";
                 }
             }
@@ -686,13 +941,13 @@ namespace CS2OpenDev.ConfigManager.Kit
             bool needsSteam = Sections.NeedsSteam(section);
             if (needsSteam && steam == null)
             {
-                report.Add(log, section, "skipped", "Steam was not found");
+                report.Add(log, section, Outcomes.Skipped, "Steam was not found");
                 return;
             }
 
             if (Sections.IsMachineWide(section) && !Platform.IsWindows)
             {
-                report.Add(log, section, "skipped", "only on Windows");
+                report.Add(log, section, Outcomes.Skipped, "only on Windows");
                 return;
             }
 
@@ -702,7 +957,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                 {
                     if (account == null)
                     {
-                        report.Add(log, section, "skipped", "no Steam account on this PC has CS2 settings");
+                        report.Add(log, section, Outcomes.Skipped, "no Steam account on this PC has CS2 settings");
                         return;
                     }
 
@@ -711,7 +966,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     List<string> redacted = new List<string>();
                     int n = CaptureTree(steam.AccountFolder(account), outDir, section, node.Section("files"),
                         delegate(string rel) { return IsAccountSetting(rel); }, redacted);
-                    report.Add(log, section, n > 0 ? "done" : "skipped", Inv.S(n) + " files from account " + account
+                    report.Add(log, section, n > 0 ? Outcomes.Done : Outcomes.Skipped, Inv.S(n) + " files from account " + account
                         + (redacted.Count > 0 ? "; passwords and server tokens left out of " + string.Join(", ", redacted.ToArray()) : ""));
                     return;
                 }
@@ -720,7 +975,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     string cfg = steam.Cs2CfgDir();
                     if (cfg == null || !Directory.Exists(cfg))
                     {
-                        report.Add(log, section, "skipped", "CS2 is not installed");
+                        report.Add(log, section, Outcomes.Skipped, "CS2 is not installed");
                         return;
                     }
 
@@ -732,7 +987,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                         {
                             return IsPlayerCfg(rel, gsi) || (IsServerCfg(rel) && !IsValveServerStub(Path.Combine(cfg, rel)));
                         }, redacted);
-                    report.Add(log, section, n > 0 ? "done" : "skipped", n > 0
+                    report.Add(log, section, n > 0 ? Outcomes.Done : Outcomes.Skipped, n > 0
                         ? Inv.S(n) + " cfg files" + (redacted.Count > 0 ? "; passwords and server tokens left out of " + string.Join(", ", redacted.ToArray()) : "")
                         : "no cfg files of your own");
                     return;
@@ -742,7 +997,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     string value = account == null ? null : steam.ReadLaunchOptions(account);
                     if (string.IsNullOrEmpty(value))
                     {
-                        report.Add(log, section, "skipped", "none are set");
+                        report.Add(log, section, Outcomes.Skipped, "none are set");
                         return;
                     }
 
@@ -751,7 +1006,8 @@ namespace CS2OpenDev.ConfigManager.Kit
                     KvNode launch = manifest.Section(section);
                     launch.Set("account", account);
                     launch.Set("value", value);
-                    report.Add(log, section, "done", value + (secrets.Count > 0 ? " (the value of " + string.Join(", ", secrets.ToArray()) + " left out)" : ""));
+                    report.Add(log, section, Outcomes.Done, value + (secrets.Count > 0 ? " (the value of " + string.Join(", ", secrets.ToArray()) + " left out)" : "")
+                        + (HasControlCharacter(value) ? "; they hold a control character, so a restore will refuse them: set them again in Steam" : ""));
                     return;
                 }
                 case Sections.Input:
@@ -769,11 +1025,11 @@ namespace CS2OpenDev.ConfigManager.Kit
                     if (node.Children.Count == 0)
                     {
                         manifest.Remove(section);
-                        report.Add(log, section, "skipped", "every hotkey is on, as Windows ships it");
+                        report.Add(log, section, Outcomes.Skipped, "every hotkey is on, as Windows ships it");
                         return;
                     }
 
-                    report.Add(log, section, "done", Inv.S(node.Children.Count) + " hotkeys off");
+                    report.Add(log, section, Outcomes.Done, Inv.S(node.Children.Count) + " hotkeys off");
                     return;
                 }
                 case Sections.GameBar:
@@ -782,7 +1038,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     string exe = section == Sections.Cs2Exe ? steam.Cs2Exe() : null;
                     if (section == Sections.Cs2Exe && exe == null)
                     {
-                        report.Add(log, section, "skipped", "CS2 is not installed");
+                        report.Add(log, section, Outcomes.Skipped, "CS2 is not installed");
                         return;
                     }
 
@@ -791,12 +1047,12 @@ namespace CS2OpenDev.ConfigManager.Kit
                     if (node.Child("registry") == null)
                     {
                         manifest.Remove(section);
-                        report.Add(log, section, "skipped", "nothing is set");
+                        report.Add(log, section, Outcomes.Skipped, "nothing is set");
                         return;
                     }
 
                     int unset = node.Child("registry").Children.Count - n;
-                    report.Add(log, section, "done", Inv.S(n) + " registry values" + (unset > 0 ? ", " + Inv.S(unset) + " at Windows' default" : ""));
+                    report.Add(log, section, Outcomes.Done, Inv.S(n) + " registry values" + (unset > 0 ? ", " + Inv.S(unset) + " at Windows' default" : ""));
                     return;
                 }
                 case Sections.Power:
@@ -804,7 +1060,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     string[] plan = WindowsSettings.ActivePowerPlan();
                     if (plan == null)
                     {
-                        report.Add(log, section, "skipped", "the active power plan could not be read");
+                        report.Add(log, section, Outcomes.Skipped, "the active power plan could not be read");
                         return;
                     }
 
@@ -820,7 +1076,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                         node.Set("template", template);
                     }
 
-                    report.Add(log, section, "done", template != null
+                    report.Add(log, section, Outcomes.Done, template != null
                         ? plan[1]
                         : plan[1] + ", a plan of your own: another PC switches to it only if it has one of that name");
                     return;
@@ -830,7 +1086,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     string why = NvidiaDrs.Initialize();
                     if (why != null)
                     {
-                        report.Add(log, section, "skipped", why);
+                        report.Add(log, section, Outcomes.Skipped, why);
                         return;
                     }
 
@@ -871,7 +1127,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                         }
                     }
 
-                    report.Add(log, section, "done", Inv.S(changed) + " of " + Inv.S(NvidiaDrs.CarriedSettings.Length) + " carried settings changed from the driver's" + (driver == null ? "" : " (driver " + driver + ")"));
+                    report.Add(log, section, Outcomes.Done, Inv.S(changed) + " of " + Inv.S(NvidiaDrs.CarriedSettings.Length) + " carried settings changed from the driver's" + (driver == null ? "" : " (driver " + driver + ")"));
                     return;
                 }
                 case Sections.Vibrance:
@@ -879,7 +1135,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     IList<int[]> levels = NvidiaDrs.ReadVibrance();
                     if (levels.Count == 0)
                     {
-                        report.Add(log, section, "skipped", "no NVIDIA display reports digital vibrance");
+                        report.Add(log, section, Outcomes.Skipped, "no NVIDIA display reports digital vibrance");
                         return;
                     }
 
@@ -897,17 +1153,18 @@ namespace CS2OpenDev.ConfigManager.Kit
                     if (shown.Count == 0)
                     {
                         manifest.Remove(section);
-                        report.Add(log, section, "skipped", "no NVIDIA display reported its vibrance level");
+                        report.Add(log, section, Outcomes.Skipped, "no NVIDIA display reported its vibrance level");
                         return;
                     }
 
-                    report.Add(log, section, "done", "level " + string.Join(", ", shown.ToArray()));
+                    report.Add(log, section, Outcomes.Done, "level " + string.Join(", ", shown.ToArray()));
                     return;
                 }
             }
         }
 
         /// <summary>Records a group's registry values, as <see cref="RegistryEntryForBackup" /> decides. Returns how many values hold something.</summary>
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
         private static int CaptureRegistry(string group, KvNode node, string cs2Exe)
         {
             int n = 0;
@@ -1245,6 +1502,106 @@ namespace CS2OpenDev.ConfigManager.Kit
             return null;
         }
 
+        /// <summary>
+        ///     On an undo, whether an account folder that is not found is gone (the PC was wiped, so nothing of it is
+        ///     left to put back) rather than looked for in the wrong place: only when this is the Steam folder the
+        ///     record's restore wrote to and its userdata folder is still there.
+        /// </summary>
+        private static bool AccountGone(SteamInstall steam, KvNode manifest)
+        {
+            string recorded = manifest.Get("steam");
+            return recorded != null && SamePath(recorded, steam.Root) && Directory.Exists(steam.UserData);
+        }
+
+        private static string UndoAccountReason(string why, SteamInstall steam, KvNode manifest)
+        {
+            if (AccountGone(steam, manifest))
+            {
+                return why + "; nothing of it is left to put back";
+            }
+
+            string recorded = manifest.Get("steam");
+            if (recorded != null && SamePath(recorded, steam.Root))
+            {
+                return "the account's folder is not under " + steam.Root + ", which has no userdata folder at all (wiped, or nobody has signed in since). "
+                       + "Left in the record; if it is gone for good, acb undo --set-aside with this record's name forgets what it holds";
+            }
+
+            return "the account's folder is not under " + steam.UserData + ", and its restore wrote to "
+                   + (recorded ?? "a Steam folder it did not record") + ". Left in the record; run acb undo again with --steam-path naming that Steam folder, "
+                   + "or, if that Steam is gone for good, acb undo --set-aside with this record's name forgets what it holds";
+        }
+
+        /// <summary>
+        ///     Why an undo record's part written through a Steam folder can no longer be put back, or null when it
+        ///     still can: the Steam folder its restore wrote to is gone, or under it the account's folder (cs2,
+        ///     launch) or the CS2 install (cs2game, cs2exe). A record that names no Steam folder is not known to be
+        ///     stranded. Looks only at the recorded folder, never for this PC's own Steam.
+        /// </summary>
+        internal static string StrandedReason(KvNode manifest, string section)
+        {
+            string recorded = manifest.Get("steam");
+            if (string.IsNullOrEmpty(recorded))
+            {
+                return null;
+            }
+
+            SteamInstall steam = SteamInstall.Locate(recorded);
+            if (steam == null)
+            {
+                return "Steam is gone from " + recorded;
+            }
+
+            if (section == Sections.Cs2 || section == Sections.Launch)
+            {
+                KvNode node = manifest.Child(section);
+                string account = node == null ? null : node.Get("account");
+                return IsAccountId(account) && !Directory.Exists(Path.Combine(steam.UserData, account))
+                    ? "account " + account + " is gone from " + steam.UserData
+                    : null;
+            }
+
+            if (section == Sections.Cs2Game || section == Sections.Cs2Exe)
+            {
+                return steam.Cs2InstallDir() == null ? "CS2 is not installed under " + steam.Root : null;
+            }
+
+            return null;
+        }
+
+        /// <summary>The choice key for a file: its section and path, a _lastclouded twin named by its .vcfg.</summary>
+        public static string FileChoiceKey(string section, string relative)
+        {
+            const string twin = "_lastclouded";
+            string named = relative.EndsWith(".vcfg" + twin, StringComparison.OrdinalIgnoreCase) ? relative.Substring(0, relative.Length - twin.Length) : relative;
+            return section + "/" + named;
+        }
+
+        private static bool LeftByChoice(ICollection<string> leave, string section, string relative)
+        {
+            if (leave == null || leave.Count == 0)
+            {
+                return false;
+            }
+
+            string key = FileChoiceKey(section, relative);
+            foreach (string left in leave)
+            {
+                if (string.Equals(left, key, Platform.IsWindows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool SamePath(string a, string b)
+        {
+            return string.Equals(Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar),
+                Platform.IsWindows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+
         /// <summary>Whether a manifest's account is exactly a userdata folder name: digits, a nonzero 32-bit number.</summary>
         private static bool IsAccountId(string account)
         {
@@ -1527,25 +1884,34 @@ namespace CS2OpenDev.ConfigManager.Kit
         ///     replaces under <see cref="RestoreOptions.UndoRoot" /> before each change, and a part that fails
         ///     partway is put back from that record at once. If that rollback fails too, the run stops there.
         /// </summary>
-        public static RunReport Restore(IBackupSource source, RestoreMode mode, RestoreOptions options, TextWriter log)
+        internal static RunReport Restore(IBackupSource source, RestoreMode mode, RestoreOptions options, TextWriter log)
         {
             KvNode manifest = source.Manifest;
             RunReport report = new RunReport();
-            SteamInstall steam = SteamInstall.Locate(options.SteamRoot);
+            // Steam is looked for only when a chosen part reads or writes it, so a run of the driver's settings opens
+            // no Steam folder at all.
             bool isUndo = mode == RestoreMode.Undo;
+            if (!isUndo && !options.DryRun && (!options.WriteUndo || string.IsNullOrEmpty(options.UndoRoot)))
+            {
+                // Nothing restores without its record, whoever builds the options.
+                throw new ArgumentException("A restore that changes anything needs the restorer's undo store; a record is never kept beside the backup or skipped.");
+            }
+
+            SteamInstall steam = UsesSteam(manifest, options) ? (options.LocateSteam ?? SteamInstall.Locate)(options.SteamRoot) : null;
             string userSid = Platform.IsWindows ? WindowsSettings.CurrentUserSid() : null;
             UndoLog undo = null;
-            if (options.WriteUndo && !options.DryRun && !isUndo)
+            if (!options.DryRun && !isUndo)
             {
-                if (string.IsNullOrEmpty(options.UndoRoot))
-                {
-                    throw new ArgumentException("A restore that records undo needs the restorer's undo store; a record is never kept beside the backup.");
-                }
-
                 undo = new UndoLog(options.UndoRoot, NewManifest("undo", "Advanced Config Backup restore of " + (manifest.Get("created") ?? "a backup")));
                 if (userSid != null)
                 {
                     undo.Manifest.Set("user", userSid);
+                }
+
+                // The undo writes back into this Steam, whichever one a later run would find first.
+                if (steam != null)
+                {
+                    undo.Manifest.Set("steam", steam.Root);
                 }
 
                 if (options.RecordNotes != null)
@@ -1569,25 +1935,32 @@ namespace CS2OpenDev.ConfigManager.Kit
                 int first = report.Results.Count;
                 try
                 {
-                    RestoreSection(section, node, manifest, source, isUndo, options, steam, undo, userSid, report, log);
+                    if (section == Sections.Nvidia || section == Sections.Vibrance)
+                    {
+                        RestoreDriverSection(section, node, manifest, source, isUndo, options, steam, undo, userSid, report, log);
+                    }
+                    else
+                    {
+                        RestoreSection(section, node, manifest, source, isUndo, options, steam, undo, userSid, report, log);
+                    }
                 }
                 catch (NvAdminRequiredException)
                 {
-                    report.Add(log, section, "admin", "needs an administrator");
+                    report.Add(log, section, Outcomes.Admin, "needs an administrator");
                 }
                 catch (UndoClaimException ex)
                 {
-                    report.Add(log, section, "failed", ex.Message);
+                    report.Add(log, section, Outcomes.Failed, ex.Message);
                     report.ClaimProblem = ex.Message;
                     break;
                 }
                 catch (TargetBlockedException ex)
                 {
-                    report.Add(log, section, "blocked", ex.Message);
+                    report.Add(log, section, Outcomes.Blocked, ex.Message);
                 }
                 catch (Exception ex)
                 {
-                    report.Add(log, section, "failed", ex.Message);
+                    report.Add(log, section, Outcomes.Failed, ex.Message);
                 }
 
                 if (!isUndo && undo != null && Failed(report, first) && undo.Manifest.Child(section) != null)
@@ -1618,7 +1991,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     catch (Exception ex)
                     {
                         manifest.Add(node);
-                        report.Add(log, section, "failed", "put back, but the record could not note it: " + ex.Message);
+                        report.Add(log, section, Outcomes.Failed, "put back, but the record could not note it: " + ex.Message);
                     }
                 }
             }
@@ -1643,11 +2016,103 @@ namespace CS2OpenDev.ConfigManager.Kit
             return report;
         }
 
+        /// <summary>
+        ///     Restores a part that calls into the NVIDIA driver on the driver worker, as capture does, so a driver
+        ///     that never answers leaves the part for later instead of holding the run. A worker given up on before
+        ///     its first change never makes one; one given up on after it may have changed the PC, so a restore
+        ///     reports that part as not known. Such a worker is not waited for and dies with the process; its record
+        ///     still covers what it changed, because each driver write is recorded first. What the part threw is
+        ///     thrown here, as any other part's would be.
+        /// </summary>
+        private static void RestoreDriverSection(string section, KvNode node, KvNode manifest, IBackupSource source, bool isUndo, RestoreOptions options,
+            SteamInstall steam, UndoLog undo, string userSid, RunReport report, TextWriter log)
+        {
+            RunReport partReport = new RunReport();
+            DriverGate gate = new DriverGate();
+            partReport.Gate = gate;
+            Exception error;
+            string why = RunOnDriverWorker(delegate
+            {
+                RestoreSection(section, node, manifest, source, isUndo, options, steam, undo, userSid, partReport, null);
+            }, CancellationToken.None, options.DriverTimeoutMs, out error);
+            if (why != null)
+            {
+                bool mayHaveChanged = gate.GiveUp();
+                report.Add(log, section, Outcomes.Deferred, why + DriverTimeoutDetail(mayHaveChanged, isUndo));
+                if (mayHaveChanged && !isUndo)
+                {
+                    report.Unknown.Add(section);
+                }
+
+                return;
+            }
+
+            foreach (SectionResult result in partReport.Results)
+            {
+                report.Add(log, result.Section, result.Outcome, result.Detail);
+            }
+
+            report.Observed.AddRange(partReport.Observed);
+            if (error != null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
+            }
+        }
+
+        /// <summary>Before a driver part's change: stops a worker the run already gave up on, so it changes nothing late.</summary>
+        private static void PassGate(RunReport report)
+        {
+            if (report.Gate != null)
+            {
+                report.Gate.Enter();
+            }
+        }
+
+        /// <summary>What follows the reason a driver part was given up on, by whether its worker may have changed the PC.</summary>
+        internal static string DriverTimeoutDetail(bool mayHaveChanged, bool isUndo)
+        {
+            if (!mayHaveChanged)
+            {
+                return "; nothing of this part was changed. Run this again later";
+            }
+
+            return isUndo
+                ? "; some of it may already be put back. Run acb undo again later, which puts back what the record still holds"
+                : "; it may already have changed this part, so what it changed is not known. Its record keeps what it recorded, and acb undo puts that back";
+        }
+
+        private static bool UsesSteam(KvNode manifest, RestoreOptions options)
+        {
+            foreach (string section in Sections.All)
+            {
+                if (Sections.NeedsSteam(section) && manifest.Child(section) != null && (options.Only == null || options.Only.Contains(section)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>A control character other than a tab, or a line or paragraph separator; a tab is printed as \t.</summary>
+        private static bool HasControlCharacter(string text)
+        {
+            foreach (char c in text)
+            {
+                if ((char.IsControl(c) && c != '\t') || c == '\u2028' || c == '\u2029')
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private static bool Failed(RunReport report, int first)
         {
             for (int i = first; i < report.Results.Count; i++)
             {
-                if (report.Results[i].Outcome == "failed")
+                if (report.Results[i].Outcome == Outcomes.Failed)
                 {
                     return true;
                 }
@@ -1677,10 +2142,21 @@ namespace CS2OpenDev.ConfigManager.Kit
                     SteamRoot = options.SteamRoot,
                     AccountId = options.AccountId,
                     WriteUndo = false,
-                    SkipProcessChecks = true
+                    SkipProcessChecks = true,
+                    StartNvidia = options.StartNvidia,
+                    DriverTimeoutMs = options.DriverTimeoutMs
                 };
                 RunReport result = new RunReport();
-                RestoreSection(section, recorded, undo.Manifest, new FolderSource(undo.Dir, undo.Manifest), true, back, steam, null, userSid, result, log);
+                IBackupSource recordSource = new FolderSource(undo.Dir, undo.Manifest);
+                if (section == Sections.Nvidia || section == Sections.Vibrance)
+                {
+                    // Bounded as the restore was, so a driver that stops answering stops the rollback, not the run.
+                    RestoreDriverSection(section, recorded, undo.Manifest, recordSource, true, back, steam, null, userSid, result, log);
+                }
+                else
+                {
+                    RestoreSection(section, recorded, undo.Manifest, recordSource, true, back, steam, null, userSid, result, log);
+                }
                 if (!Settled(result, 0))
                 {
                     return "it could not be put back (" + string.Join("; ", result.Results.ConvertAll(delegate(SectionResult r) { return r.ToString(); }).ToArray()) + ")";
@@ -1729,8 +2205,7 @@ namespace CS2OpenDev.ConfigManager.Kit
 
             for (int i = first; i < report.Results.Count; i++)
             {
-                string outcome = report.Results[i].Outcome;
-                if (outcome != "done" && outcome != "skipped")
+                if (!Outcomes.IsSettled(report.Results[i].Outcome))
                 {
                     return false;
                 }
@@ -1747,14 +2222,22 @@ namespace CS2OpenDev.ConfigManager.Kit
             bool needsSteam = Sections.NeedsSteam(section);
             if (needsSteam && steam == null)
             {
-                report.Add(log, section, "deferred", "Steam was not found on this PC");
+                report.Add(log, section, Outcomes.Deferred, (string.IsNullOrEmpty(options.SteamRoot)
+                    ? "Steam was not found on this PC"
+                    : "Steam was not found at " + options.SteamRoot)
+                    + (isUndo ? "; run acb undo again once it is back, or, if it is gone for good, acb undo --set-aside with this record's name forgets what it holds" : ""));
                 return;
             }
 
             if (Sections.IsMachineWide(section) && !Platform.IsWindows)
             {
-                report.Add(log, section, "skipped", "only on Windows");
+                report.Add(log, section, Outcomes.Skipped, "only on Windows");
                 return;
+            }
+
+            if (!dry && MachineWritesRefused && Sections.IsMachineWide(section))
+            {
+                throw new InvalidOperationException("a test run never writes this PC's Windows or driver settings");
             }
 
             string backupAccount = BackupAccount(manifest);
@@ -1764,7 +2247,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     isUndo ? manifest.Get("user") : null, userSid);
                 if (other != null)
                 {
-                    report.Add(log, section, "deferred", other);
+                    report.Add(log, section, Outcomes.Deferred, other);
                     return;
                 }
             }
@@ -1776,7 +2259,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                 {
                     if (options.IsRunning("cs2"))
                     {
-                        report.Add(log, section, "deferred", "CS2 is running; it rewrites its settings when it closes. Close it and run this again");
+                        report.Add(log, section, Outcomes.Deferred, "CS2 is running; it rewrites its settings when it closes. Close it and run this again");
                         return;
                     }
 
@@ -1789,9 +2272,9 @@ namespace CS2OpenDev.ConfigManager.Kit
                         account = ResolveAccount(steam, options.AccountId, backupAccount, out why);
                         if (account == null)
                         {
-                            // Left for later on a restore (the account signs in, then restore again); on an undo the
-                            // account's folder is gone, so nothing of it is left to put back.
-                            report.Add(log, section, isUndo ? "skipped" : "deferred", why);
+                            // Left for later on a restore (the account signs in, then restore again). On an undo the
+                            // part is forgotten only when the account's folder is gone from the Steam its restore wrote to.
+                            report.Add(log, section, isUndo && AccountGone(steam, manifest) ? Outcomes.Skipped : Outcomes.Deferred, isUndo ? UndoAccountReason(why, steam, manifest) : why);
                             return;
                         }
 
@@ -1803,7 +2286,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                         targetRoot = steam.Cs2CfgDir();
                         if (targetRoot == null)
                         {
-                            report.Add(log, section, "deferred", "CS2 is not installed on this PC");
+                            report.Add(log, section, Outcomes.Deferred, "CS2 is not installed on this PC");
                             return;
                         }
 
@@ -1817,14 +2300,49 @@ namespace CS2OpenDev.ConfigManager.Kit
                     List<byte[]> sources = new List<byte[]>();
                     List<KvNode> merged = new List<KvNode>();
                     List<string> outside = new List<string>();
+                    List<string> gsiLeft = new List<string>();
+                    List<string> gsiWritten = new List<string>();
+                    List<string> chosenLeft = new List<string>();
+                    HashSet<string> named = new HashSet<string>(Platform.IsWindows ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
                     foreach (KvNode file in files == null ? new KvNode[0] : (IEnumerable<KvNode>)files.Children)
                     {
                         string relative = SafeRelative(file.Key);
-                        // An undo snapshot puts back whatever its restore changed; a backup writes only what capture would carry.
-                        if (!isUndo && !IsRestorablePath(section, relative))
+                        // A second entry for one file would be recorded over the first, so the undo record would keep
+                        // the restore's own bytes instead of what the PC had.
+                        if (!named.Add(relative))
                         {
-                            outside.Add(relative);
+                            throw new FormatException("the backup names " + relative + " twice, so nothing in this part was written");
+                        }
+                        // An undo snapshot puts back whatever its restore changed; a backup writes only what capture would carry.
+                        if (!isUndo && !IsRestorablePath(section, relative, options.IncludeGameStateIntegration))
+                        {
+                            if (IsRestorablePath(section, relative, true))
+                            {
+                                gsiLeft.Add(relative);
+                            }
+                            else
+                            {
+                                outside.Add(relative);
+                            }
+
                             continue;
+                        }
+
+                        if (!isUndo && LeftByChoice(options.LeaveFiles, section, relative))
+                        {
+                            chosenLeft.Add(relative);
+                            continue;
+                        }
+
+                        // Capture records every file by its SHA-256; "absent" (delete it) is only ever an undo record's.
+                        if (!isUndo && !IsSha256Hex(file.Value))
+                        {
+                            throw new IOException("the backup's entry for " + relative + " is not a file's SHA-256, so nothing in this part was written");
+                        }
+
+                        if (!isUndo && section == Sections.Cs2Game && IsGameStateIntegration(relative))
+                        {
+                            gsiWritten.Add(relative);
                         }
 
                         byte[] source = null;
@@ -1850,7 +2368,16 @@ namespace CS2OpenDev.ConfigManager.Kit
                         string writable = Path.Combine(targetRoot, relative.Replace('/', Path.DirectorySeparatorChar));
                         try
                         {
-                            SafeFile.CheckWritable(writable, dry);
+                            // An undo entry that removes a file the restore added needs only the right to remove it.
+                            if (file.Value == "absent")
+                            {
+                                SafeFile.CheckDeletable(writable);
+                            }
+                            else
+                            {
+                                SafeFile.CheckWritable(writable, dry);
+                            }
+
                             report.Observed.Add(section + " " + writable + " " + (File.Exists(writable) ? Sha256(writable) : "absent"));
                         }
                         catch (IOException ex)
@@ -1923,16 +2450,37 @@ namespace CS2OpenDev.ConfigManager.Kit
                         written++;
                     }
 
-                    report.Add(log, section, "done", (dry ? "would write " : "wrote ") + Inv.S(written) + " files to " + where
+                    // What each file holds now, after the restore, so an undo's review can tell a file changed since
+                    // (by CS2, or by the next person) from one as the restore left it. Kept after the writes, as it
+                    // records nothing that undo needs: a record without it is put back all the same.
+                    if (undoFiles != null && !dry && !isUndo && written > 0)
+                    {
+                        KvNode wrote = undo.Section(section).Section(WroteKey);
+                        for (int i = 0; i < relatives.Count; i++)
+                        {
+                            string target = Path.Combine(targetRoot, relatives[i].Replace('/', Path.DirectorySeparatorChar));
+                            if (sources[i] != null && wrote.Child(relatives[i]) == null && File.Exists(target))
+                            {
+                                wrote.Set(relatives[i], Sha256(target));
+                            }
+                        }
+
+                        UndoLog.Save(undoLog);
+                    }
+
+                    report.Add(log, section, Outcomes.Done, (dry ? "would write " : "wrote ") + Inv.S(written) + " files to " + where
                                                      + (removed > 0 ? ", removed " + Inv.S(removed) : "")
-                                                     + (outside.Count > 0 ? "; left alone, as files this tool does not restore: " + string.Join(", ", outside.ToArray()) : ""));
+                                                     + (gsiWritten.Count > 0 ? "; among them game state integration files, which send live game data to the address they name: " + string.Join(", ", gsiWritten.ToArray()) : "")
+                                                     + (gsiLeft.Count > 0 ? "; left alone, as game state integration files are restored only with --gsi: " + string.Join(", ", gsiLeft.ToArray()) : "")
+                                                     + (outside.Count > 0 ? "; left alone, as files this tool does not restore: " + string.Join(", ", outside.ToArray()) : "")
+                                                     + (chosenLeft.Count > 0 ? "; left alone, as chosen: " + string.Join(", ", chosenLeft.ToArray()) : ""));
                     return;
                 }
                 case Sections.Launch:
                 {
                     if (options.IsRunning("steam"))
                     {
-                        report.Add(log, section, "deferred", "Steam is running; it rewrites launch options when it closes. Close Steam and run this again");
+                        report.Add(log, section, Outcomes.Deferred, "Steam is running; it rewrites launch options when it closes. Close Steam and run this again");
                         return;
                     }
 
@@ -1940,11 +2488,18 @@ namespace CS2OpenDev.ConfigManager.Kit
                     string account = ResolveAccount(steam, options.AccountId, backupAccount, out why);
                     if (account == null)
                     {
-                        report.Add(log, section, isUndo ? "skipped" : "deferred", why);
+                        report.Add(log, section, isUndo && AccountGone(steam, manifest) ? Outcomes.Skipped : Outcomes.Deferred, isUndo ? UndoAccountReason(why, steam, manifest) : why);
                         return;
                     }
 
                     string value = node.Get("absent") == "1" ? null : node.Get("value");
+                    if (!isUndo && value != null && HasControlCharacter(value))
+                    {
+                        // Steam's own window cannot enter one, and Steam would show it to the player as written.
+                        // Capture copies it but says a restore will refuse it, so the player learns on their own PC.
+                        throw new InvalidDataException("the backup's launch options hold a control character, which Steam's own window cannot enter, so they were not written");
+                    }
+
                     string localConfig = steam.LocalConfigPath(account);
                     report.Observed.Add(section + " " + localConfig + " " + (File.Exists(localConfig) ? Sha256(localConfig) : "absent"));
                     if (undo != null)
@@ -1970,7 +2525,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                         steam.WriteLaunchOptions(account, value, undoLog == null ? null : Path.Combine(undoLog.Dir, "files", section, "localconfig.vdf"));
                     }
 
-                    report.Add(log, section, "done", (value ?? "cleared") + " for " + Where(account, backupAccount));
+                    report.Add(log, section, Outcomes.Done, (value ?? "cleared") + " for " + Where(account, backupAccount));
                     return;
                 }
                 case Sections.Input:
@@ -2007,7 +2562,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                         n++;
                     }
 
-                    report.Add(log, section, n > 0 ? "done" : "skipped", n > 0 ? Inv.S(n) + " hotkeys " + (isUndo ? "put back" : "turned off") : "already as wanted");
+                    report.Add(log, section, n > 0 ? Outcomes.Done : Outcomes.Skipped, n > 0 ? Inv.S(n) + " hotkeys " + (isUndo ? "put back" : "turned off") : "already as wanted");
                     return;
                 }
                 case Sections.GameBar:
@@ -2019,13 +2574,13 @@ namespace CS2OpenDev.ConfigManager.Kit
                         exe = steam.Cs2Exe();
                         if (exe == null)
                         {
-                            report.Add(log, section, "deferred", "CS2 is not installed on this PC");
+                            report.Add(log, section, Outcomes.Deferred, "CS2 is not installed on this PC");
                             return;
                         }
                     }
 
                     int n = RestoreRegistry(node, exe, undoLog, section, dry, isUndo);
-                    report.Add(log, section, "done", Inv.S(n) + " registry values");
+                    report.Add(log, section, Outcomes.Done, Inv.S(n) + " registry values");
                     return;
                 }
                 case Sections.Power:
@@ -2041,15 +2596,15 @@ namespace CS2OpenDev.ConfigManager.Kit
                     string created = null;
                     if (action == "missing")
                     {
-                        report.Add(log, section, "skipped", "this PC has no plan named " + shown);
+                        report.Add(log, section, Outcomes.Skipped, "this PC has no plan named " + shown);
                     }
                     else if (action == "already")
                     {
-                        report.Add(log, section, "skipped", "already " + shown);
+                        report.Add(log, section, Outcomes.Skipped, "already " + shown);
                     }
                     else if (dry)
                     {
-                        report.Add(log, section, "done", (action == "copy" ? "would add Windows' " : "would switch to ") + shown);
+                        report.Add(log, section, Outcomes.Done, (action == "copy" ? "would add Windows' " : "would switch to ") + shown);
                     }
                     else
                     {
@@ -2057,7 +2612,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                         // read is not switched away from.
                         if (undo != null && current == null)
                         {
-                            report.Add(log, section, "failed", "could not read which power plan is active, so it could not be put back afterwards; left as it is");
+                            report.Add(log, section, Outcomes.Failed, "could not read which power plan is active, so it could not be put back afterwards; left as it is");
                             return;
                         }
 
@@ -2073,8 +2628,37 @@ namespace CS2OpenDev.ConfigManager.Kit
                         if (action == "copy")
                         {
                             // A Windows template this PC hides: a copy of it is listed, recorded, and removed by Undo.
-                            useGuid = WindowsSettings.DuplicatePowerPlan(useGuid, out problem);
-                            created = useGuid;
+                            // The record says a copy is being made before powercfg runs, so an undo can say so if
+                            // acb stops before the copy's GUID is on record.
+                            ICollection<string> before = WindowsSettings.PowerPlans().Keys;
+                            if (u != null)
+                            {
+                                u.Set("creating", useGuid);
+                                UndoLog.Save(undoLog);
+                            }
+
+                            string copyOf = useGuid;
+                            useGuid = WindowsSettings.DuplicatePowerPlan(copyOf, out problem);
+                            if (useGuid == null)
+                            {
+                                // powercfg stopped after 30 seconds, or failed after making the copy: a plan that
+                                // appeared meanwhile, the only one, is that copy, recorded so the rollback removes it.
+                                List<string> appeared = new List<string>();
+                                foreach (string listed in WindowsSettings.PowerPlans().Keys)
+                                {
+                                    if (!before.Contains(listed) && !WindowsSettings.IsBuiltInPowerPlan(listed))
+                                    {
+                                        appeared.Add(listed);
+                                    }
+                                }
+
+                                created = before.Count > 0 && appeared.Count == 1 ? appeared[0] : null;
+                            }
+                            else
+                            {
+                                created = useGuid;
+                            }
+
                             if (u != null && created != null)
                             {
                                 u.Set("created", created);
@@ -2089,7 +2673,13 @@ namespace CS2OpenDev.ConfigManager.Kit
 
                         // The record stays when the switch fails: powercfg may have switched before it failed or
                         // was stopped, and switching back to the plan already active is harmless.
-                        report.Add(log, section, problem == null ? "done" : "failed", problem ?? (action == "copy" ? "added Windows' " + shown + " and switched to it" : shown));
+                        report.Add(log, section, problem == null ? Outcomes.Done : Outcomes.Failed, problem ?? (action == "copy" ? "added Windows' " + shown + " and switched to it" : shown));
+                    }
+
+                    if (isUndo && node.Get("creating") != null && node.Get("created") == null)
+                    {
+                        report.Add(log, section, Outcomes.Skipped, "the restore was copying Windows' plan " + node.Get("creating")
+                                                                    + " when it stopped, and may have left a copy; powercfg /list shows it, and powercfg /delete removes it");
                     }
 
                     // Undoing a restore that added a plan: switched back above, so the copy can go.
@@ -2101,14 +2691,14 @@ namespace CS2OpenDev.ConfigManager.Kit
                         string createdProblem = CreatedPlanProblem(added, active == null ? null : active[0]);
                         if (createdProblem != null)
                         {
-                            report.Add(log, section, "skipped", "did not remove " + added + ": " + createdProblem);
+                            report.Add(log, section, Outcomes.Skipped, "did not remove " + added + ": " + createdProblem);
                         }
                         else if (listed.ContainsKey(added))
                         {
                             string deleteProblem = WindowsSettings.DeletePowerPlan(added);
                             if (deleteProblem != null)
                             {
-                                report.Add(log, section, "failed", "could not remove the plan the restore added: " + deleteProblem);
+                                report.Add(log, section, Outcomes.Failed, "could not remove the plan the restore added: " + deleteProblem);
                             }
                         }
                     }
@@ -2122,8 +2712,18 @@ namespace CS2OpenDev.ConfigManager.Kit
                     // others on the PC.
                     KvNode toCheck = node.Path("cs2", "settings");
                     Dictionary<string, string> unusable = new Dictionary<string, string>();
+                    HashSet<uint> ids = new HashSet<uint>();
                     foreach (KvNode item in toCheck == null ? new KvNode[0] : (IEnumerable<KvNode>)toCheck.Children)
                     {
+                        // One setting under two spellings would be recorded twice, the second time with the backup's value.
+                        uint parsed;
+                        if (!isUndo && item.Key.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                                    && uint.TryParse(item.Key.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out parsed)
+                                    && !ids.Add(parsed))
+                        {
+                            throw new FormatException("the backup names NVIDIA setting " + item.Key + " twice, so nothing in this part was written");
+                        }
+
                         string entryProblem = NvidiaEntryProblem(item);
                         if (entryProblem != null)
                         {
@@ -2136,10 +2736,13 @@ namespace CS2OpenDev.ConfigManager.Kit
                         }
                     }
 
-                    string why = NvidiaDrs.Initialize();
+                    bool mayPass;
+                    string why = options.StartNvidia != null ? options.StartNvidia(out mayPass) : NvidiaDrs.Initialize(out mayPass);
                     if (why != null)
                     {
-                        report.Add(log, section, "deferred", why);
+                        // No driver or no NVIDIA GPU stays so: a restore has nothing to do here, while an undo keeps
+                        // its record for a PC that gets the driver back.
+                        report.Add(log, section, !isUndo && !mayPass ? Outcomes.Skipped : Outcomes.Deferred, why);
                         return;
                     }
 
@@ -2153,12 +2756,14 @@ namespace CS2OpenDev.ConfigManager.Kit
                     int n = 0;
                     List<string> refused = new List<string>();
                     List<string> leftToGlobal = new List<string>();
+                    // An undo's entries the driver would not take stay in the record for the next run.
+                    List<string> kept = new List<string>();
                     using (NvidiaDrs drs = NvidiaDrs.Open())
                     {
                         IntPtr profile = drs.FindCs2Profile();
                         if (profile == IntPtr.Zero)
                         {
-                            report.Add(log, section, "skipped", "this NVIDIA driver has no CS2 profile; update the driver and restore again");
+                            report.Add(log, section, Outcomes.Skipped, "this NVIDIA driver has no CS2 profile; update the driver and restore again");
                             return;
                         }
 
@@ -2187,6 +2792,7 @@ namespace CS2OpenDev.ConfigManager.Kit
 
                             bool absent = item.Get("absent") == "1";
                             NvSetting previous = drs.UserSetting(profile, id);
+                            report.Observed.Add(section + " " + item.Key + " " + (previous == null ? "absent" : previous.Type + " " + previous.Value));
                             // A value the undo could not write back is never replaced, so every undo entry is one it accepts.
                             if (!isUndo && previous != null && !CanRecordNvidia(item.Key, previous))
                             {
@@ -2213,6 +2819,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                             bool reset = false;
                             if (!dry)
                             {
+                                PassGate(report);
                                 try
                                 {
                                     if (absent && previous != null)
@@ -2243,6 +2850,11 @@ namespace CS2OpenDev.ConfigManager.Kit
                                 {
                                     // A reset the driver took is saved with the rest, so it still goes into the undo snapshot.
                                     refused.Add(item.Key + " (" + ex.Message + ")");
+                                    if (isUndo)
+                                    {
+                                        kept.Add(item.Key);
+                                    }
+
                                     if (!reset)
                                     {
                                         continue;
@@ -2251,6 +2863,11 @@ namespace CS2OpenDev.ConfigManager.Kit
                                 catch (FormatException ex)
                                 {
                                     refused.Add(item.Key + " (" + ex.Message + ")");
+                                    if (isUndo)
+                                    {
+                                        kept.Add(item.Key);
+                                    }
+
                                     if (!reset)
                                     {
                                         continue;
@@ -2258,16 +2875,20 @@ namespace CS2OpenDev.ConfigManager.Kit
                                 }
                             }
 
-                            KvNode u = undoSettings.Section(item.Key);
-                            if (previous == null)
+                            // The first value recorded for a setting is what the driver had; it is never replaced.
+                            if (undoSettings.Child(item.Key) == null)
                             {
-                                u.Set("absent", "1");
-                            }
-                            else
-                            {
-                                u.Set("name", previous.Name);
-                                u.Set("type", previous.Type);
-                                u.Set("value", previous.Value);
+                                KvNode u = undoSettings.Section(item.Key);
+                                if (previous == null)
+                                {
+                                    u.Set("absent", "1");
+                                }
+                                else
+                                {
+                                    u.Set("name", previous.Name);
+                                    u.Set("type", previous.Type);
+                                    u.Set("value", previous.Value);
+                                }
                             }
 
                             n++;
@@ -2275,9 +2896,11 @@ namespace CS2OpenDev.ConfigManager.Kit
 
                         if (!dry && n > 0)
                         {
-                            // On record before the driver saves; taken off again only when the driver refuses the save
+                            // On record before the driver saves: the worker may be cut off at any point, so this order is
+                            // what keeps a change from going unrecorded. Taken off again only when the driver refuses the save
                             // for want of rights, which changes nothing. After any other failure the driver may have
                             // kept some of the session, and undoing a value that did not change is harmless.
+                            PassGate(report);
                             if (undo != null)
                             {
                                 undo.Add(pending);
@@ -2301,7 +2924,34 @@ namespace CS2OpenDev.ConfigManager.Kit
                         }
                     }
 
-                    report.Add(log, section, "done", (dry ? "would change " : "changed ") + Inv.S(n) + " settings on the CS2 profile"
+                    if (isUndo && !dry && kept.Count > 0)
+                    {
+                        // The record keeps only what is still to be put back, so a rerun writes nothing twice. An
+                        // entry that can never be written (not carried, damaged) is let go, and said so.
+                        foreach (KvNode item in new List<KvNode>(settings.Children))
+                        {
+                            if (!kept.Contains(item.Key))
+                            {
+                                settings.Remove(item.Key);
+                            }
+                        }
+
+                        try
+                        {
+                            backup.SaveManifest();
+                        }
+                        catch (Exception)
+                        {
+                            // The whole record stays, and putting back a value that is already back is harmless.
+                        }
+
+                        report.Add(log, section, Outcomes.Deferred, "put back " + Inv.S(n) + " settings on the CS2 profile; skipped "
+                                                                + string.Join(", ", refused.ToArray()) + "; the record keeps " + string.Join(", ", kept.ToArray())
+                                                                + " for the next acb undo. If this driver never takes them, an administrator's acb undo --set-aside lets older records go ahead without this one");
+                        return;
+                    }
+
+                    report.Add(log, section, Outcomes.Done, (dry ? "would change " : "changed ") + Inv.S(n) + " settings on the CS2 profile"
                                                      + (refused.Count > 0 ? "; skipped " + string.Join(", ", refused.ToArray()) : "")
                                                      + (leftToGlobal.Count > 0 ? "; left as this PC's global profile sets them, since the driver reports no default: " + string.Join(", ", leftToGlobal.ToArray()) : ""));
                     return;
@@ -2310,6 +2960,16 @@ namespace CS2OpenDev.ConfigManager.Kit
                 {
                     // Displays are matched by NVAPI's order, which says nothing about which monitor is which; so a
                     // backup is applied only where that cannot go wrong: one display here, one level in the backup.
+                    // The driver is started first, as for the NVIDIA part, so a driver that is updating or recovering
+                    // leaves the part for later instead of reading as a PC without NVIDIA displays.
+                    bool vibranceMayPass;
+                    string notStarted = options.StartNvidia != null ? options.StartNvidia(out vibranceMayPass) : NvidiaDrs.Initialize(out vibranceMayPass);
+                    if (notStarted != null)
+                    {
+                        report.Add(log, section, !isUndo && !vibranceMayPass ? Outcomes.Skipped : Outcomes.Deferred, notStarted);
+                        return;
+                    }
+
                     IList<int[]> current = NvidiaDrs.ReadVibrance();
                     KvNode u = undo == null ? null : undo.Section(section);
                     List<int> wanted = new List<int>();
@@ -2336,7 +2996,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                         bool oneLevel = wanted.Count > 0 && wanted.TrueForAll(delegate(int level) { return level == wanted[0]; });
                         if (shown != 1 || current[0] == null || !oneLevel)
                         {
-                            report.Add(log, section, "skipped", shown != 1 || current[0] == null
+                            report.Add(log, section, Outcomes.Skipped, shown != 1 || current[0] == null
                                 ? "this PC has " + Inv.S(shown) + " NVIDIA displays; set vibrance in NVIDIA Control Panel"
                                 : "the backup holds different levels for several displays; set vibrance in NVIDIA Control Panel");
                             return;
@@ -2354,12 +3014,19 @@ namespace CS2OpenDev.ConfigManager.Kit
                         int index = indexes[i];
                         if (index >= current.Count || current[index] == null)
                         {
-                            report.Add(log, section, isUndo ? "deferred" : "skipped", "this PC has no NVIDIA display number " + Inv.S(index + 1)
+                            report.Add(log, section, isUndo ? Outcomes.Deferred : Outcomes.Skipped, "this PC has no NVIDIA display number " + Inv.S(index + 1)
                                 + (isUndo ? " now; turn that monitor on and run this again" : ""));
                             missing++;
                             continue;
                         }
 
+                        if (!dry)
+                        {
+                            PassGate(report);
+                        }
+
+                        // On record before the level changes: the worker may be cut off at any point, so this order is
+                        // what keeps a change from going unrecorded.
                         if (u != null)
                         {
                             u.Set(Inv.S(index), Inv.S(current[index][0]));
@@ -2376,13 +3043,13 @@ namespace CS2OpenDev.ConfigManager.Kit
 
                     if (n > 0 || missing == 0)
                     {
-                        report.Add(log, section, n > 0 ? "done" : "skipped", Inv.S(n) + " displays");
+                        report.Add(log, section, n > 0 ? Outcomes.Done : Outcomes.Skipped, Inv.S(n) + " displays");
                     }
 
                     return;
                 }
                 default:
-                    report.Add(log, section, "failed", "this restore has no handler for the part");
+                    report.Add(log, section, Outcomes.Failed, "this restore has no handler for the part");
                     return;
             }
         }
@@ -2392,6 +3059,7 @@ namespace CS2OpenDev.ConfigManager.Kit
         ///     choice added or removed, the rest kept); an undo snapshot holds the target's values as they were
         ///     and writes them back as they are. Every entry is checked before the first is written.
         /// </summary>
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
         private static int RestoreRegistry(KvNode node, string cs2Exe, UndoLog undoLog, string section, bool dry, bool isUndo)
         {
             KvNode list = node.Child("registry");
@@ -2400,6 +3068,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                 return 0;
             }
 
+            HashSet<string> named = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (KvNode entry in list.Children)
             {
                 string problem = RegistryEntryProblem(entry, isUndo);
@@ -2407,11 +3076,24 @@ namespace CS2OpenDev.ConfigManager.Kit
                 {
                     throw new FormatException(problem);
                 }
+
+                // A value named twice would be recorded twice, the second time with the backup's data.
+                if (!isUndo && !named.Add(entry.Get("key") + "\\" + entry.Get("name")))
+                {
+                    throw new FormatException("the backup names " + entry.Get("key") + "\\" + entry.Get("name") + " twice");
+                }
             }
 
             int n = 0;
             KvNode undoList = undoLog == null ? null : undoLog.Manifest.Section(section).Section("registry");
-            foreach (KvNode entry in list.Children)
+            // An undo writes its entries newest first, so whatever was recorded first, the value the PC had, is written last.
+            List<KvNode> entries = new List<KvNode>(list.Children);
+            if (isUndo)
+            {
+                entries.Reverse();
+            }
+
+            foreach (KvNode entry in entries)
             {
                 string subKey = entry.Get("key");
                 string name = entry.Get("name");
@@ -2565,6 +3247,12 @@ namespace CS2OpenDev.ConfigManager.Kit
 
         private static void RecordFile(string target, string undoDir, string section, string relative, KvNode undoFiles)
         {
+            // The first record of a file is what the PC had; nothing later in the same restore replaces it.
+            if (undoFiles.Child(relative) != null)
+            {
+                return;
+            }
+
             if (!File.Exists(target))
             {
                 undoFiles.Set(relative, "absent");

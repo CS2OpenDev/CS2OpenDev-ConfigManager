@@ -2,7 +2,8 @@
 
     <!-- acb's commands run in process against fake Steam folders in temp, temp undo stores and stand-ins for the
          processes, the administrator question and UAC. Nothing here restores into this machine's own Steam,
-         registry, display or driver, and no archive here holds a section that would. -->
+          registry, display or driver: the engine refuses to write a Windows or driver section in any test assembly
+         (NoMachineWrites.cs), so an archive here that holds one is only planned or refused. -->
     <PropertyGroup>
         <OutputType>Exe</OutputType>
     </PropertyGroup>
@@ -14,6 +15,7 @@
     <ItemGroup>
         <Compile Include="..\CS2OpenDev.ConfigManager.Core.Tests\FakeSteam.cs" Link="Shared\FakeSteam.cs"/>
         <Compile Include="..\CS2OpenDev.ConfigManager.Core.Tests\Permissions.cs" Link="Shared\Permissions.cs"/>
+        <Compile Include="..\CS2OpenDev.ConfigManager.Core.Tests\NoMachineWrites.cs" Link="Shared\NoMachineWrites.cs"/>
     </ItemGroup>
 
     <ItemGroup>

@@ -22,10 +22,12 @@ public sealed class VerifiedArchive
 {
     private readonly Dictionary<string, byte[]> _entries;
 
-    internal VerifiedArchive(ArchiveManifest manifest, TrustLevel level, string manifestSha256, Dictionary<string, byte[]> entries)
+    internal VerifiedArchive(ArchiveManifest manifest, TrustLevel level, string manifestSha256, Dictionary<string, byte[]> entries,
+        string? signer = null)
     {
         Manifest = manifest;
         Level = level;
+        Signer = signer;
         ManifestSha256 = manifestSha256;
         _entries = entries;
     }
@@ -33,6 +35,12 @@ public sealed class VerifiedArchive
     public ArchiveManifest Manifest { get; }
 
     public TrustLevel Level { get; }
+
+    /// <summary>
+    ///     The SteamID64 whose signature was checked, at the identity level only; null below it. What the manifest
+    ///     says about its own account is never a signer.
+    /// </summary>
+    public string? Signer { get; }
 
     /// <summary>The SHA-256 of manifest.json: one value that names this exact archive's content.</summary>
     public string ManifestSha256 { get; }
@@ -65,7 +73,15 @@ public static class ArchiveReader
 {
     public static VerifiedArchive Open(string zipPath, ArchiveReadOptions options)
     {
-        Dictionary<string, byte[]> raw = ReadZip(zipPath);
+        using FileStream file = new(zipPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return Open(file, options);
+    }
+
+    /// <summary>As <see cref="Open(string, ArchiveReadOptions)" />, from a zip's bytes that did not come from a path.</summary>
+    public static VerifiedArchive Open(Stream zip, ArchiveReadOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        Dictionary<string, byte[]> raw = ReadZip(zip);
 
         byte[] manifestBytes = Take(raw, ArchiveFormat.ManifestEntry);
         byte[] envelopeBytes = Take(raw, ArchiveFormat.SignatureEntry);
@@ -105,15 +121,14 @@ public static class ArchiveReader
         _ => throw new ArgumentOutOfRangeException(nameof(level))
     };
 
-    private static Dictionary<string, byte[]> ReadZip(string zipPath)
+    private static Dictionary<string, byte[]> ReadZip(Stream file)
     {
         Dictionary<string, byte[]> raw = new(StringComparer.Ordinal);
         HashSet<string> folded = new(StringComparer.OrdinalIgnoreCase);
         long total = 0;
         try
         {
-            using FileStream file = new(zipPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-            using ZipArchive zip = new(file, ZipArchiveMode.Read);
+            using ZipArchive zip = new(file, ZipArchiveMode.Read, leaveOpen: true);
             if (zip.Entries.Count > ArchiveFormat.MaxEntries)
             {
                 throw new ArchiveRejectedException($"The backup has more than {ArchiveFormat.MaxEntries} entries.");

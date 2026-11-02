@@ -1,5 +1,4 @@
 #nullable disable
-#pragma warning disable
 // v1's C# 5 style; see the header of KeyValues.cs.
 
 using System;
@@ -60,6 +59,11 @@ namespace CS2OpenDev.ConfigManager.Kit
             if (!string.IsNullOrEmpty(overrideRoot))
             {
                 return Directory.Exists(overrideRoot) ? new SteamInstall(Path.GetFullPath(overrideRoot)) : null;
+            }
+
+            if (ConfigBackup.MachineWritesRefused)
+            {
+                throw new InvalidOperationException("A test run never looks for this PC's own Steam; name a Steam folder.");
             }
 
             List<string> candidates = new List<string>();
@@ -403,6 +407,7 @@ namespace CS2OpenDev.ConfigManager.Kit
             return newest;
         }
 
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
         internal static string ReadRegistryString(RegistryKey hive, string subKey, string name)
         {
             try
@@ -421,6 +426,7 @@ namespace CS2OpenDev.ConfigManager.Kit
 
     internal static class Platform
     {
+        [System.Runtime.Versioning.SupportedOSPlatformGuard("windows")]
         public static bool IsWindows
         {
             get { return Path.DirectorySeparatorChar == '\\'; }

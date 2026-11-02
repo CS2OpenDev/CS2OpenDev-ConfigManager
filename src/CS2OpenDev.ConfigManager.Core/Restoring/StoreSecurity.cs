@@ -11,18 +11,24 @@ namespace CS2OpenDev.ConfigManager.Restoring;
 ///     administrator. %ProgramData% lets any user create a subfolder, which is why its own ACL is not relied on.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public static class StoreSecurity
+internal static class StoreSecurity
 {
     private static readonly SecurityIdentifier Administrators = new(WellKnownSidType.BuiltinAdministratorsSid, null);
     private static readonly SecurityIdentifier LocalSystem = new(WellKnownSidType.LocalSystemSid, null);
     private static readonly SecurityIdentifier Users = new(WellKnownSidType.BuiltinUsersSid, null);
-    private static readonly SecurityIdentifier TrustedInstaller = new("S-1-5-80-956008885-3425870976-2374617826-3634166101");
+    private static readonly SecurityIdentifier TrustedInstaller = new("S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464");
 
     /// <summary>
     ///     Rights that change a folder, what it holds, or who may: write or append (add a file or folder), extended
     ///     attributes, attributes, delete child, delete, change permissions, take ownership, and generic write or all.
     /// </summary>
     private const int ChangingRights = 0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 | 0x40000 | 0x80000 | 0x10000000 | 0x40000000;
+
+    /// <summary>
+    ///     Rights on a folder above the program that would let someone swap the program's folder for another: delete
+    ///     child (rename what it holds), delete (rename itself), change permissions, take ownership, generic write or all.
+    /// </summary>
+    private const int ReplacingRights = 0x40 | 0x10000 | 0x40000 | 0x80000 | 0x10000000 | 0x40000000;
 
     /// <summary>What players get on the record folder itself: list it and read attributes, so `acb undo` can tell whether records wait.</summary>
     private const FileSystemRights ListOnly = FileSystemRights.ListDirectory | FileSystemRights.ReadAttributes | FileSystemRights.Synchronize;
@@ -102,6 +108,87 @@ public static class StoreSecurity
 
             bool allows = known.AceQualifier == AceQualifier.AccessAllowed;
             if (allows && (known.AccessMask & ChangingRights) != 0 && !IsTrusted(known.SecurityIdentifier))
+            {
+                return "lets " + Name(known.SecurityIdentifier) + " change it";
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     Why a program must not be started as an administrator from where it is, or null. Windows loads a program's
+    ///     DLLs from its own folder first, so anyone who can add a file beside it, replace it, or swap a folder above
+    ///     it could run their code in the elevated process before acb's first line. The program and its folder may be
+    ///     changed only by Administrators, SYSTEM, TrustedInstaller or <paramref name="alsoTrusted" /> (the person who
+    ///     would approve the prompt), every folder above it not swapped by anyone else, and none of them be a link.
+    /// </summary>
+    public static string? ProgramProblem(string programPath, SecurityIdentifier? alsoTrusted)
+    {
+        ArgumentNullException.ThrowIfNull(programPath);
+        string full = Path.GetFullPath(programPath);
+        if (full.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            return full + " is on a network share";
+        }
+
+        string? at = full;
+        int rights = ChangingRights;
+        while (at is not null)
+        {
+            FileAttributes attributes = File.GetAttributes(at);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                return at + " is a link or another reparse point";
+            }
+
+            FileSystemSecurity security = (attributes & FileAttributes.Directory) != 0
+                ? new DirectoryInfo(at).GetAccessControl(AccessControlSections.Owner | AccessControlSections.Access)
+                : new FileInfo(at).GetAccessControl(AccessControlSections.Owner | AccessControlSections.Access);
+            if (DescriptorProblem(new RawSecurityDescriptor(security.GetSecurityDescriptorBinaryForm(), 0), rights, alsoTrusted) is { } problem)
+            {
+                return at + " " + problem;
+            }
+
+            // The program and its own folder: nothing may be added or changed. Above them: nothing may be swapped.
+            rights = at == full ? ChangingRights : ReplacingRights;
+            at = Path.GetDirectoryName(at);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    ///     As <see cref="DescriptorProblem(RawSecurityDescriptor)" />, for <paramref name="rights" />, also trusting
+    ///     <paramref name="alsoTrusted" />. Entries that only pass to new children (inherit-only) are not this object's own.
+    /// </summary>
+    public static string? DescriptorProblem(RawSecurityDescriptor descriptor, int rights, SecurityIdentifier? alsoTrusted)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        if (descriptor.Owner is not { } owner || !(IsTrusted(owner) || owner == alsoTrusted))
+        {
+            return "is owned by " + Name(descriptor.Owner) + ", not by administrators";
+        }
+
+        if (descriptor.DiscretionaryAcl is not { } acl)
+        {
+            return "has no access list, so everyone may change it";
+        }
+
+        foreach (GenericAce ace in acl)
+        {
+            if ((ace.AceFlags & AceFlags.InheritOnly) != 0)
+            {
+                continue;
+            }
+
+            if (ace is not QualifiedAce known)
+            {
+                return "has an access entry of a kind this restorer does not read";
+            }
+
+            bool allows = known.AceQualifier == AceQualifier.AccessAllowed;
+            if (allows && (known.AccessMask & rights) != 0 && !IsTrusted(known.SecurityIdentifier) && known.SecurityIdentifier != alsoTrusted)
             {
                 return "lets " + Name(known.SecurityIdentifier) + " change it";
             }

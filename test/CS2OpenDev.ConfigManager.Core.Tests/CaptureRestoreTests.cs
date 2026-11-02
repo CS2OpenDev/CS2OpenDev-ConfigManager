@@ -69,6 +69,23 @@ public class CaptureRestoreTests
         await Assert.That(KitBackup.IsPlayerCfg(relative, gsi)).IsEqualTo(kept);
     }
 
+    /// <summary>
+    ///     Capture reads the folder's own long names, so a player's nade~1.cfg is carried. A restore never writes a
+    ///     name that could be an 8.3 alias of another file; one too long to be an alias is written.
+    /// </summary>
+    [Test]
+    [Arguments("nade~1.cfg", true, false)]
+    [Arguments("GAMEST~1.CFG", true, false)]
+    [Arguments("PRACTI~1/nades.cfg", true, false)]
+    [Arguments("practice~2.cfg", true, true)]
+    [Arguments("practice/nades~2.config.cfg", true, true)]
+    [Arguments("autoexec.cfg.", false, false)]
+    public async Task ATildeAndADigit_AreCaptured_AndRestoredOnlyWhenTheNameCannotBeAnAlias(string relative, bool captured, bool restored)
+    {
+        await Assert.That(KitBackup.IsPlayerCfg(relative, false)).IsEqualTo(captured);
+        await Assert.That(KitBackup.IsRestorablePath(Sections.Cs2Game, relative, false)).IsEqualTo(restored);
+    }
+
     [Test]
     public async Task Capture_CarriesTheFileSections_AndNothingElseFromTheAccount()
     {
@@ -408,4 +425,119 @@ public class CaptureRestoreTests
         SkipProcessChecks = true,
         UndoRoot = Path.Combine(target.Root, "acb-undo")
     };
+
+    /// <summary>
+    ///     In a test assembly the engine refuses to write a Windows or driver section, before the first read or write,
+    ///     so a test can never change this PC. The only entry is one the carried list refuses as well.
+    /// </summary>
+    [Test]
+    public async Task ATestRun_NeverWritesAWindowsSection()
+    {
+        await Assert.That(KitBackup.MachineWritesRefused).IsTrue();
+        using FakeSteam target = new();
+        using TempDir temp = new();
+        Directory.CreateDirectory(temp.Path);
+        File.WriteAllText(Path.Combine(temp.Path, KitBackup.ManifestName), """
+            "ConfigBackup"
+            {
+            	"format"		"1"
+            	"kind"		"backup"
+            	"input"
+            	{
+            		"Software\\acb-test-never-written"		"0"
+            	}
+            }
+            """);
+        RestoreOptions options = Options(target);
+        options.Only = [Sections.Input];
+        options.WriteUndo = true;
+
+        SectionResult result = Engine.Restore(temp.Path, options).Results.Single();
+
+        await Assert.That(result.Outcome).IsEqualTo(OperatingSystem.IsWindows() ? Outcomes.Failed : Outcomes.Skipped).Because(result.ToString());
+        if (OperatingSystem.IsWindows())
+        {
+            await Assert.That(result.Detail).Contains("a test run never writes this PC's Windows or driver settings");
+        }
+    }
+
+    /// <summary>
+    ///     In a test assembly an engine restore that names no Steam folder never looks for this PC's own Steam, so it
+    ///     writes nothing there.
+    /// </summary>
+    [Test]
+    public async Task ATestRun_NeverFindsThisPcsSteam()
+    {
+        using FakeSteam source = new();
+        source.Write(FakeSteam.Cfg("autoexec.cfg"), "sensitivity 9");
+        using TempDir capture = new();
+        CaptureOptions capturing = new() { SteamRoot = source.Root };
+        capturing.Include.Clear();
+        capturing.Include.Add(Sections.Cs2Game);
+        KitBackup.Capture(capturing, capture.Path, TextWriter.Null);
+        using FakeSteam target = new();
+        RestoreOptions options = Options(target);
+        options.SteamRoot = null;
+        options.Only = [Sections.Cs2Game];
+
+        await Assert.That(() => Engine.Restore(capture.Path, options)).Throws<InvalidOperationException>()
+            .WithMessageContaining("never looks for this PC's own Steam");
+        await Assert.That(() => SteamInstall.Locate(null)).Throws<InvalidOperationException>();
+        await Assert.That(SteamInstall.Locate(target.Root)).IsNotNull();
+    }
+
+    /// <summary>
+    ///     A record's part is stranded only when what its restore wrote through is gone: the recorded Steam folder,
+    ///     the account's folder (cs2, launch) or the CS2 install (cs2game, cs2exe). Otherwise it can still be put back.
+    /// </summary>
+    [Test]
+    public async Task StrandedReason_IsGivenOnlyWhenTheRecordedSteamAccountOrInstallIsGone()
+    {
+        using FakeSteam target = new();
+        KvNode manifest = new(KitBackup.RootKey);
+        manifest.Set("steam", target.Root);
+        manifest.Section(Sections.Cs2).Set("account", FakeSteam.AccountId);
+        manifest.Section(Sections.Launch).Set("account", FakeSteam.AccountId);
+
+        foreach (string part in new[] { Sections.Cs2, Sections.Launch, Sections.Cs2Game, Sections.Cs2Exe })
+        {
+            await Assert.That(KitBackup.StrandedReason(manifest, part)).IsNull().Because(part);
+        }
+
+        Directory.Delete(target.PathOf("steamapps/common/Counter-Strike Global Offensive"), recursive: true);
+        await Assert.That(KitBackup.StrandedReason(manifest, Sections.Cs2Game)).Contains("CS2 is not installed");
+        await Assert.That(KitBackup.StrandedReason(manifest, Sections.Cs2Exe)).Contains("CS2 is not installed");
+        await Assert.That(KitBackup.StrandedReason(manifest, Sections.Cs2)).IsNull();
+
+        Directory.Delete(target.PathOf("userdata/" + FakeSteam.AccountId), recursive: true);
+        await Assert.That(KitBackup.StrandedReason(manifest, Sections.Cs2)).Contains("account " + FakeSteam.AccountId + " is gone");
+        await Assert.That(KitBackup.StrandedReason(manifest, Sections.Launch)).Contains("is gone");
+
+        KvNode moved = new(KitBackup.RootKey);
+        moved.Set("steam", Path.Combine(target.Root, "no-such-steam"));
+        await Assert.That(KitBackup.StrandedReason(moved, Sections.Cs2Game)).Contains("Steam is gone from");
+
+        KvNode unnamed = new(KitBackup.RootKey);
+        await Assert.That(KitBackup.StrandedReason(unnamed, Sections.Cs2Game)).IsNull().Because("a record that names no Steam is not known to be stranded");
+    }
+
+    /// <summary>Nothing restores without its record: a restore that changes anything and names no undo store is refused before its first change.</summary>
+    [Test]
+    public async Task ARestoreWithoutAnUndoRecord_IsRefusedBeforeAnyChange()
+    {
+        using FakeSteam source = new();
+        using FakeSteam target = new();
+        using TempDir temp = new();
+        Capture(source, temp.Path);
+        target.Write(FakeSteam.Cfg("autoexec.cfg"), "echo target");
+
+        RestoreOptions noStore = Options(target);
+        noStore.UndoRoot = null;
+        RestoreOptions noRecord = Options(target);
+        noRecord.WriteUndo = false;
+
+        await Assert.That(() => Engine.Restore(temp.Path, noStore)).Throws<ArgumentException>();
+        await Assert.That(() => Engine.Restore(temp.Path, noRecord)).Throws<ArgumentException>();
+        await Assert.That(target.Read(FakeSteam.Cfg("autoexec.cfg"))).IsEqualTo("echo target");
+    }
 }

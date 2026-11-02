@@ -1,8 +1,9 @@
 #nullable disable
-#pragma warning disable
+#pragma warning disable CA1825, CA1846, CA2219
 // Written in C# 5 for v1's script restorer, which compiled this kit in Windows PowerShell 5.1. That restorer
-// is gone and the dialect no longer binds, but the code keeps its style until it is reworked, and the two lines
-// above keep the nullable checks and the .NET 10 analyzers off it until then. New code goes outside Kit/.
+// is gone and the dialect no longer binds, but the code keeps its style until it is reworked: nullable checks are
+// off, and each kit file turns off by name only the style rules that dialect breaks. The platform, disposal,
+// security, culture and trimming analyzers run here as everywhere else. New code goes outside Kit/.
 
 using System;
 using System.Collections.Generic;
@@ -473,10 +474,12 @@ namespace CS2OpenDev.ConfigManager.Kit
         ///     holds open), by asking for the rights the swap uses. In a real run a read-only file has its attribute
         ///     cleared for the check and put back, which changes no content, and a flag that cannot be put back is
         ///     an error, not a silent loss. A dry run changes nothing: a read-only file is only opened for reading
-        ///     and its attributes, which is the access clearing the flag needs.
+        ///     and its attributes, which is the access clearing the flag needs. The folder is checked too, new file
+        ///     or not, since every write first adds a temporary file beside the target.
         /// </summary>
         public static void CheckWritable(string path, bool dryRun)
         {
+            CheckFolder(path);
             if (!File.Exists(path))
             {
                 return;
@@ -543,9 +546,85 @@ namespace CS2OpenDev.ConfigManager.Kit
             }
         }
 
+        /// <summary>
+        ///     Throws when an existing file could not be deleted (an ACL that denies it, or a program that holds it
+        ///     open), by asking for the rights <see cref="Delete" /> uses; a file that is not there is nothing to do.
+        ///     Removing a file adds nothing to its folder, so the folder is not asked to take a new file. Changes nothing.
+        /// </summary>
+        public static void CheckDeletable(string path)
+        {
+            if (!File.Exists(path))
+            {
+                return;
+            }
+
+            if (!Platform.IsWindows)
+            {
+                // W_OK | X_OK on the folder: removing an entry needs both.
+                string folder = Path.GetDirectoryName(path);
+                if (folder != null && Access(folder, 0x2 | 0x1) != 0)
+                {
+                    throw new IOException("its folder " + folder + " does not let this user remove files");
+                }
+
+                return;
+            }
+
+            // DELETE (granted by the file or by its folder), and write-attributes when a read-only flag goes first.
+            bool readOnly = (File.GetAttributes(path) & FileAttributes.ReadOnly) != 0;
+            OpenOrThrow(path, 0x10000u | (readOnly ? 0x100u : 0u));
+        }
+
+        /// <summary>
+        ///     Throws when this user may not add a file to the folder <paramref name="path" /> goes into, or, when that
+        ///     folder is missing, add the folders it needs to the nearest one there is. Opens the folder for those
+        ///     rights only, so nothing is created.
+        /// </summary>
+        private static void CheckFolder(string path)
+        {
+            string folder = Path.GetDirectoryName(path);
+            bool makesFolders = false;
+            while (folder != null && !Directory.Exists(folder))
+            {
+                makesFolders = true;
+                folder = Path.GetDirectoryName(folder);
+            }
+
+            if (folder == null)
+            {
+                return;
+            }
+
+            if (Platform.IsWindows)
+            {
+                try
+                {
+                    // FILE_ADD_FILE, and FILE_ADD_SUBDIRECTORY when folders are made; a folder opens only with backup semantics.
+                    OpenOrThrow(folder, makesFolders ? 0x6u : 0x2u, 0x02000000);
+                }
+                catch (IOException ex)
+                {
+                    throw new IOException("its folder " + folder + " does not let this user add " + (makesFolders ? "folders" : "files") + ": " + ex.Message, ex);
+                }
+
+                return;
+            }
+
+            // W_OK | X_OK: adding an entry needs both.
+            if (Access(folder, 0x2 | 0x1) != 0)
+            {
+                throw new IOException("its folder " + folder + " does not let this user add " + (makesFolders ? "folders" : "files"));
+            }
+        }
+
         private static void OpenOrThrow(string path, uint access)
         {
-            using (SafeFileHandle handle = CreateFileW(path, access, 0x7, IntPtr.Zero, 3, 0, IntPtr.Zero))
+            OpenOrThrow(path, access, 0);
+        }
+
+        private static void OpenOrThrow(string path, uint access, uint flags)
+        {
+            using (SafeFileHandle handle = CreateFileW(path, access, 0x7, IntPtr.Zero, 3, flags, IntPtr.Zero))
             {
                 if (handle.IsInvalid)
                 {
@@ -553,6 +632,10 @@ namespace CS2OpenDev.ConfigManager.Kit
                 }
             }
         }
+
+        [DllImport("libc", EntryPoint = "access", CharSet = CharSet.Ansi, BestFitMapping = false, ThrowOnUnmappableChar = true, SetLastError = true)]
+        [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+        private static extern int Access([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int mode);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
@@ -596,7 +679,15 @@ namespace CS2OpenDev.ConfigManager.Kit
                 if (File.Exists(path))
                 {
                     readOnly = ClearReadOnly(path);
-                    File.Replace(temp, path, null, true);
+                    try
+                    {
+                        File.Replace(temp, path, null, true);
+                    }
+                    catch (IOException) when (!File.Exists(path) && File.Exists(temp))
+                    {
+                        // Replace can fail after the old file is gone; the temporary file is then the only copy left.
+                        File.Move(temp, path);
+                    }
                 }
                 else
                 {

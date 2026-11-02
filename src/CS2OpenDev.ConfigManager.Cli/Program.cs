@@ -3,6 +3,11 @@ using CS2OpenDev.ConfigManager.Cli;
 #pragma warning disable CA1031 // The last line of defence: whatever escaped is reported and ends the run with a code, never a crash dialog.
 try
 {
+    if (OperatingSystem.IsWindows())
+    {
+        NativeLoading.OnlyFromSystem32();
+    }
+
     return Acb.Run(args, AcbHost.Real());
 }
 catch (Exception ex)

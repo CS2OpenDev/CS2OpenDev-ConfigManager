@@ -273,8 +273,15 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
     /// </summary>
     public void CheckBackup(string zipPath)
     {
-        ArgumentNullException.ThrowIfNull(zipPath);
         Results.Clear();
+        Status = Check(zipPath, Results);
+    }
+
+    /// <summary>What <see cref="CheckBackup" /> shows: the status line it returns, and a line per fact into <paramref name="results" />.</summary>
+    internal static string Check(string zipPath, ICollection<string> results)
+    {
+        ArgumentNullException.ThrowIfNull(zipPath);
+        ArgumentNullException.ThrowIfNull(results);
         VerifiedArchive archive;
         try
         {
@@ -282,28 +289,29 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
         }
         catch (ArchiveRejectedException ex)
         {
-            Status = $"Do not restore {Path.GetFileName(zipPath)}: {ex.Message}";
-            return;
+            return $"Do not restore {Path.GetFileName(zipPath)}: {ex.Message}";
         }
 #pragma warning disable CA1031 // A file that cannot be read is reported on the page.
         catch (Exception ex)
 #pragma warning restore CA1031
         {
-            Status = "Could not check " + zipPath + ": " + ex.Message;
-            return;
+            return "Could not check " + zipPath + ": " + ex.Message;
         }
 
         ArchiveManifest manifest = archive.Manifest;
-        Results.Add("Trust level: " + ArchiveReader.Name(archive.Level)
-                    + (archive.Level == TrustLevel.Hash ? " (unsigned: it proves the files are unchanged since it was made, not who made it)" : ""));
-        Results.Add(string.Create(CultureInfo.CurrentCulture,
+        bool isUnsigned = archive.Level == TrustLevel.Hash;
+        results.Add("Trust level: " + ArchiveReader.Name(archive.Level)
+                    + (isUnsigned ? " (unsigned: anyone could have edited this; it shows only that the files match the manifest)" : ""));
+        results.Add(string.Create(CultureInfo.CurrentCulture,
             $"Made {manifest.Created.ToLocalTime():yyyy-MM-dd HH:mm} by {manifest.Tool.Name} {manifest.Tool.Version}, for {manifest.Platform}"));
         foreach (ArchiveSection section in manifest.Sections)
         {
-            Results.Add(section.Label + (section.Notes is { Count: > 0 } notes ? " (" + string.Join("; ", notes) + ")" : ""));
+            results.Add(section.Label + (section.Notes is { Count: > 0 } notes ? " (" + string.Join("; ", notes) + ")" : ""));
         }
 
-        Status = $"{Path.GetFileName(zipPath)} is unchanged since it was made: {manifest.Entries.Count} files, each matching its manifest.";
+        return isUnsigned
+            ? $"{Path.GetFileName(zipPath)}: {manifest.Entries.Count} files, each matching its manifest, so nothing was damaged or changed by accident. It is unsigned, so anyone could have edited it."
+            : $"{Path.GetFileName(zipPath)} is unchanged since it was made: {manifest.Entries.Count} files, each matching its manifest.";
     }
 
     private bool CanRevealArchive() => LastArchive is not null;

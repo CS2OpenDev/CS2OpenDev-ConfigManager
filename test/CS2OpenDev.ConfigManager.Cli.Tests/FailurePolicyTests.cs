@@ -158,6 +158,68 @@ public class FailurePolicyTests
         await Assert.That(target.Read(FakeSteam.Cfg(Autoexec))).IsEqualTo("echo autoexec\nexec sd_core").Because("the other section still applies");
     }
 
+    /// <summary>
+    ///     Row 4 for a folder that refuses new files, as a cafe may lock the cfg folder: every write first adds a
+    ///     temporary file there, so the plan already shows the part blocked, and the restore writes nothing and
+    ///     exits 2 rather than failing partway.
+    /// </summary>
+    [Test]
+    public async Task Row4_AFolderThatRefusesNewFiles_BlocksItsSection_InThePlanAndTheRestore()
+    {
+        using TestHost host = new();
+        using FakeSteam source = new();
+        using FakeSteam target = new();
+        File.Delete(target.PathOf(FakeSteam.Cfg(Autoexec)));
+        string zip = TestArchives.FromSteam(source, host.Temp, Sections.Cs2Game);
+        string cfg = Path.GetDirectoryName(target.PathOf(FakeSteam.Cfg(Autoexec)))!;
+        int plan;
+        int restore;
+        using (Permissions.NoNewFiles(cfg))
+        {
+            plan = host.Run("plan", "--steam-path", target.Root, zip);
+            restore = host.Run("restore", "--yes", "--steam-path", target.Root, zip);
+        }
+
+        await Assert.That(plan).IsEqualTo(ExitCodes.PartsLeft).Because(host.All);
+        await Assert.That(restore).IsEqualTo(ExitCodes.PartsLeft).Because(host.All);
+        await Assert.That(host.Output).Contains("blocked");
+        await Assert.That(host.Output).Contains("does not let this user add files");
+        await Assert.That(host.Output).DoesNotContain("failed");
+        await Assert.That(File.Exists(target.PathOf(FakeSteam.Cfg(Autoexec)))).IsFalse();
+        await Assert.That(host.Records()).IsEmpty();
+    }
+
+    /// <summary>
+    ///     Row 4's folder lock does not hold up an undo that only removes a file the restore added: removing a file
+    ///     adds nothing to the folder, so the end-of-session undo still takes the player's autoexec.cfg away.
+    /// </summary>
+    [Test]
+    public async Task Row4_AFolderThatRefusesNewFiles_StillLetsUndoRemoveAFileTheRestoreAdded()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Skip.Test("on Linux, removing a file needs the same folder right as adding one");
+        }
+
+        using TestHost host = new();
+        using FakeSteam source = new();
+        using FakeSteam target = new();
+        string autoexec = target.PathOf(FakeSteam.Cfg(Autoexec));
+        File.Delete(autoexec);
+        string zip = TestArchives.FromSteam(source, host.Temp, Sections.Cs2Game);
+        await Assert.That(host.Run("restore", "--yes", "--steam-path", target.Root, zip)).IsEqualTo(ExitCodes.Done).Because(host.All);
+        await Assert.That(File.Exists(autoexec)).IsTrue();
+        int undo;
+        using (Permissions.NoNewFiles(Path.GetDirectoryName(autoexec)!))
+        {
+            undo = host.Run("undo", "--yes", "--steam-path", target.Root);
+        }
+
+        await Assert.That(undo).IsEqualTo(ExitCodes.Done).Because(host.All);
+        await Assert.That(File.Exists(autoexec)).IsFalse();
+        await Assert.That(host.Records()).IsEmpty();
+    }
+
     /// <summary>Row 5: a section that fails partway is rolled back from its undo record and reported; exit 3.</summary>
     [Test]
     public async Task Row5_ASectionThatFailsPartway_IsRolledBack_AndExits3()
@@ -227,7 +289,10 @@ public class FailurePolicyTests
 
         if (how == "interactive-set-aside")
         {
-            await Assert.That(code).IsEqualTo(ExitCodes.Done).Because(host.All);
+            // The older record went back, but what the one set aside changed stays, so the PC is not as it was.
+            await Assert.That(code).IsEqualTo(ExitCodes.PartsLeft).Because(host.All);
+            await Assert.That(host.Output).Contains("Records set aside were not put back");
+            await Assert.That(host.Output).DoesNotContain("the PC is back as it was");
             await Assert.That(target.Read(FakeSteam.Cfg(Autoexec))).IsEqualTo("echo original");
             await Assert.That(Directory.Exists(Path.Combine(host.UserStore, UndoStore.SetAsideFolder, newest.Name))).IsTrue();
             return;

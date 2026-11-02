@@ -136,6 +136,8 @@ internal sealed class FakeSteam : IDisposable
 
     public bool Exists(string relative) => File.Exists(PathOf(relative));
 
+    public void Delete(string relative) => File.Delete(PathOf(relative));
+
     public void Write(string relative, string text)
     {
         string path = PathOf(relative);

@@ -68,7 +68,7 @@ public sealed class OrganiserPolicy
         PolicyDocument document;
         try
         {
-            document = JsonSerializer.Deserialize(bytes, PolicyJson.Default.PolicyDocument)
+            document = JsonSerializer.Deserialize(JsonText.Utf8(bytes), PolicyJson.Default.PolicyDocument)
                        ?? throw new PolicyException("The policy file is empty.");
         }
         catch (JsonException ex)
@@ -126,9 +126,15 @@ public sealed class OrganiserPolicy
         }
 
         // Only a signature proves who made a backup; the manifest's own account is what the backup says about itself.
+        // A signer that was not checked, or is not named, refuses, so an identity-level reader cannot pass by default.
         if (SteamIds is not null && archive.Level != TrustLevel.Identity)
         {
             return "the policy accepts backups signed by named Steam accounts, and only an identity-level backup proves who signed it";
+        }
+
+        if (SteamIds is not null && (archive.Signer is null || !SteamIds.Contains(archive.Signer, StringComparer.Ordinal)))
+        {
+            return $"the policy accepts backups signed by {string.Join(", ", SteamIds)}, and this one is signed by {archive.Signer ?? "no checked Steam account"}";
         }
 
         return null;

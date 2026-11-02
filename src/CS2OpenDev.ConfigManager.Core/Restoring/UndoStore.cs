@@ -4,7 +4,7 @@ using CS2OpenDev.ConfigManager.Kit;
 namespace CS2OpenDev.ConfigManager.Restoring;
 
 /// <summary>One undo record in a store: a folder named by its sequence number, holding backup.vdf and the copies.</summary>
-public sealed class UndoRecord
+internal sealed class UndoRecord
 {
     internal UndoRecord(string dir, KvNode? manifest, string? problem)
     {
@@ -44,7 +44,7 @@ public sealed class UndoRecord
 ///     atomically and written before each change (by the engine); finished ones move into <c>applied/</c>, and an
 ///     unreadable one the person sets aside moves into <c>set-aside/</c>, so it no longer holds back older ones.
 /// </summary>
-public sealed class UndoStore
+internal sealed class UndoStore
 {
     public const string AppliedFolder = "applied";
     public const string SetAsideFolder = "set-aside";
@@ -122,23 +122,40 @@ public sealed class UndoStore
         }
     }
 
-    /// <summary>Every record waiting in the store, newest first by sequence number, which the clock cannot reorder.</summary>
+    /// <summary>
+    ///     Every record waiting in the store, newest first by sequence number, which the clock cannot reorder.
+    ///     Throws <see cref="UndoStoreUnreachableException" /> when the store may be there but cannot be reached, so
+    ///     that is never taken for a store with nothing in it.
+    /// </summary>
     public IReadOnlyList<UndoRecord> Records()
     {
         if (!Directory.Exists(Root))
         {
-            return [];
+            return UnreachableReason() is { } why ? throw new UndoStoreUnreachableException(Root, why, null) : [];
         }
 
-        string[] names = [.. Directory.EnumerateDirectories(Root).Select(Path.GetFileName).OfType<string>()];
+        string[] names;
+        try
+        {
+            names = [.. Directory.EnumerateDirectories(Root).Select(Path.GetFileName).OfType<string>()];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new UndoStoreUnreachableException(Root, ex.Message, ex);
+        }
+
         List<UndoRecord> records = [];
         foreach (string name in ConfigBackup.NewestFirst(names))
         {
             string dir = Path.Combine(Root, name);
             if (!File.Exists(Path.Combine(dir, ConfigBackup.ManifestName)))
             {
-                // The engine writes the record before each change, so a folder without one changed nothing.
-                records.Add(new UndoRecord(dir, null, null));
+                // A claim makes its backup.vdf before anything else goes into the folder, so an empty folder is a
+                // claim cut short that changed nothing. Anything else beside a missing backup.vdf means the record
+                // was lost after the restore wrote it, and what it changed is unknown.
+                records.Add(IsEmptyFolder(dir)
+                    ? new UndoRecord(dir, null, null)
+                    : new UndoRecord(dir, null, ConfigBackup.ManifestName + " is missing, though the folder holds what a restore left"));
                 continue;
             }
 
@@ -153,6 +170,48 @@ public sealed class UndoStore
         }
 
         return records;
+    }
+
+    private static bool IsEmptyFolder(string dir)
+    {
+        try
+        {
+            return !Directory.EnumerateFileSystemEntries(dir).Any();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    ///     Why a store folder that does not show up may be there all the same, or null when it is simply not made
+    ///     yet: the nearest folder above it that is there cannot be listed, or lists the way down that could not be
+    ///     followed, or none is there at all (a drive or share that is offline).
+    /// </summary>
+    private string? UnreachableReason()
+    {
+        string child = Root;
+        for (string? parent = Path.GetDirectoryName(Root); parent is not null; child = parent, parent = Path.GetDirectoryName(parent))
+        {
+            if (!Directory.Exists(parent))
+            {
+                continue;
+            }
+
+            try
+            {
+                return Directory.EnumerateFileSystemEntries(parent, Path.GetFileName(child)).Any()
+                    ? child + " is there but cannot be opened"
+                    : null;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return parent + " cannot be listed (" + ex.Message + ")";
+            }
+        }
+
+        return "no folder it is in can be reached";
     }
 
     /// <summary>The record named by its folder name or its sequence number, or null.</summary>
@@ -190,5 +249,14 @@ public sealed class UndoStore
                 Thread.Sleep(200);
             }
         }
+    }
+}
+
+/// <summary>The store may hold records, but cannot be reached: a folder on the way denies access, or a drive or share is offline.</summary>
+internal sealed class UndoStoreUnreachableException : IOException
+{
+    public UndoStoreUnreachableException(string root, string reason, Exception? inner)
+        : base($"the undo store {root} cannot be reached ({reason}), so whether records wait there is unknown", inner)
+    {
     }
 }

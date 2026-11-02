@@ -160,4 +160,52 @@ public class MachineRulesTests
         await Assert.That(NvidiaDrs.IsCarriedSetting(0x1094F1F7)).IsFalse().Because("G-SYNC state belongs to the display, not the player");
         await Assert.That(NvidiaDrs.IsCarriedSetting(0x12345678)).IsFalse();
     }
+
+    /// <summary>
+    ///     Every section is classified by each rule, and a name that is not a section throws from each of them rather
+    ///     than passing as needing no Steam folder and no administrator.
+    /// </summary>
+    [Test]
+    public async Task EverySection_IsClassifiedByEachRule_AndAnUnknownNameThrows()
+    {
+        foreach (string section in Sections.All)
+        {
+            _ = Sections.Scope(section);
+            _ = Sections.NeedsSteam(section);
+            _ = CS2OpenDev.ConfigManager.Restoring.RestoreRules.NeedsAdministrator(section);
+            await Assert.That(Sections.Label(section)).IsNotEqualTo(section);
+        }
+
+        await Assert.That(() => Sections.NeedsSteam("amd")).Throws<ArgumentException>();
+        await Assert.That(() => CS2OpenDev.ConfigManager.Restoring.RestoreRules.NeedsAdministrator("amd")).Throws<ArgumentException>();
+        await Assert.That(CS2OpenDev.ConfigManager.Restoring.RestoreRules.AdministratorSections)
+            .IsEquivalentTo(OperatingSystem.IsWindows() ? [Sections.Nvidia] : Array.Empty<string>());
+    }
+
+    /// <summary>A result carries only a known outcome, so a misspelt one fails where it is made instead of passing as done.</summary>
+    [Test]
+    public async Task AResult_TakesOnlyAKnownOutcome()
+    {
+        foreach (string outcome in Outcomes.All)
+        {
+            await Assert.That(new SectionResult(Sections.Cs2, outcome, "").Outcome).IsEqualTo(outcome);
+        }
+
+        await Assert.That(() => new SectionResult(Sections.Cs2, "defered", "")).Throws<ArgumentException>();
+    }
+
+    /// <summary>
+    ///     The kit keeps v1's style, so each file turns off some style rules, by name: a bare pragma would turn off the
+    ///     platform, disposal, security and trimming analyzers too.
+    /// </summary>
+    [Test]
+    public async Task NoSourceFile_TurnsOffEveryWarning()
+    {
+        string src = Path.Combine(CS2OpenDev.ConfigManager.Testing.Repository.Root, "src");
+        string[] bare = [.. Directory.EnumerateFiles(src, "*.cs", SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(f => File.ReadLines(f).Any(l => l.Trim() == "#pragma warning disable"))];
+
+        await Assert.That(bare).IsEmpty();
+    }
 }

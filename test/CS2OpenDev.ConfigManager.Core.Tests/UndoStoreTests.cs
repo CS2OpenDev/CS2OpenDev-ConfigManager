@@ -1,4 +1,5 @@
 using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using CS2OpenDev.ConfigManager.Kit;
 using CS2OpenDev.ConfigManager.Restoring;
@@ -86,6 +87,53 @@ public class UndoStoreTests
             await Assert.That(Directory.Exists(Path.Combine(store.Root, UndoStore.SetAsideFolder, newest.Name))).IsTrue();
             await Assert.That(target.Read(FakeSteam.Cfg(Autoexec))).IsEqualTo("echo original")
                 .Because("the older record went ahead once the unreadable one was out of the way");
+        }
+    }
+
+    /// <summary>
+    ///     A claim makes backup.vdf before anything else, so only an empty record folder changed nothing. One that
+    ///     holds copies but lost its backup.vdf is unreadable: it holds back older records and is never filed.
+    /// </summary>
+    [Test]
+    public async Task ARecordFolderWithoutItsRecord_IsUnreadable_UnlessItIsEmpty()
+    {
+        using TempDir temp = new();
+        string root = temp.Sub("undo");
+        string lost = Path.Combine(root, "000002-20261101-180000Z");
+        string empty = Path.Combine(root, "000001-20261101-170000Z");
+        Directory.CreateDirectory(Path.Combine(lost, "files", Sections.Cs2Game));
+        await File.WriteAllTextAsync(Path.Combine(lost, "files", Sections.Cs2Game, Autoexec), "echo original");
+        Directory.CreateDirectory(empty);
+        UndoStore store = new(root, isMachine: false);
+
+        IReadOnlyList<UndoRecord> records = store.Records();
+
+        await Assert.That(records[0].IsReadable).IsFalse();
+        await Assert.That(records[0].Problem!).Contains(ConfigBackup.ManifestName + " is missing");
+        await Assert.That(records[1].IsReadable).IsTrue();
+        await Assert.That(records[1].Manifest).IsNull();
+
+        IReadOnlyList<RecordOutcome> outcomes = UndoRunner.Run(store, new UndoRunOptions(), null);
+
+        await Assert.That(outcomes[0].Unreadable).IsNotNull();
+        await Assert.That(Directory.Exists(lost)).IsTrue().Because("a lost record is never filed as if it changed nothing");
+        await Assert.That(outcomes[1].Filed).IsTrue();
+    }
+
+    /// <summary>A store that may be there but cannot be reached is never taken for an empty one.</summary>
+    [Test]
+    public async Task AStoreThatCannotBeReached_IsNotTakenForAnEmptyOne()
+    {
+        using TempDir temp = new();
+        string locked = temp.Sub("locked");
+        Directory.CreateDirectory(locked);
+
+        await Assert.That(new UndoStore(temp.Sub("not-made-yet"), isMachine: false).Records()).IsEmpty();
+
+        UndoStore store = new(Path.Combine(locked, "CS2OpenDev", "undo"), isMachine: false);
+        using (Permissions.Unlistable(locked))
+        {
+            await Assert.That(() => store.Records()).Throws<UndoStoreUnreachableException>();
         }
     }
 
@@ -219,6 +267,57 @@ public class UndoStoreTests
     }
 
     /// <summary>
+    ///     acb is started as an administrator only from where nobody else can add a DLL beside it or swap it: Windows
+    ///     loads a program's DLLs from its own folder first. Entries that only pass to new children do not count, and
+    ///     the person who would approve the prompt may be trusted with their own folder.
+    /// </summary>
+    [Test]
+    [Arguments("O:BAG:SYD:(A;;FA;;;BA)(A;;0x1200a9;;;BU)(A;OICIIO;FA;;;CO)", null, false)]
+    [Arguments("O:BAG:SYD:(A;;FA;;;BA)(A;OICIIO;0x1301bf;;;AU)", null, false)]
+    [Arguments("O:BAG:SYD:(A;;FA;;;BA)(A;;0x1301bf;;;AU)", "change it", false)]
+    [Arguments("O:S-1-5-21-1-2-3-1001G:SYD:(A;;FA;;;S-1-5-21-1-2-3-1001)", "owned by", false)]
+    [Arguments("O:S-1-5-21-1-2-3-1001G:SYD:(A;;FA;;;S-1-5-21-1-2-3-1001)", null, true)]
+    public async Task AProgramFolder_IsTrustedForElevationOnlyWhenNobodyElseCanChangeIt(string sddl, string? problem, bool ownerApproves)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Skip.Test("elevation is Windows only");
+            return;
+        }
+
+        SecurityIdentifier? approver = ownerApproves ? new SecurityIdentifier("S-1-5-21-1-2-3-1001") : null;
+        string? found = StoreSecurity.DescriptorProblem(new RawSecurityDescriptor(sddl), 0x2 | 0x4 | 0x40 | 0x10000 | 0x40000 | 0x80000 | 0x10000000 | 0x40000000, approver);
+
+        if (problem is null)
+        {
+            await Assert.That(found).IsNull();
+        }
+        else
+        {
+            await Assert.That(found).Contains(problem);
+        }
+    }
+
+    /// <summary>Windows' own programs pass the check; a copy in a folder this user can write does not.</summary>
+    [Test]
+    public async Task AProgramInAUsersFolder_IsNotStartedAsAnAdministrator()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Skip.Test("elevation is Windows only");
+            return;
+        }
+
+        using TempDir temp = new();
+        Directory.CreateDirectory(temp.Path);
+        string copy = temp.Sub("acb.exe");
+        await File.WriteAllBytesAsync(copy, [0x4d, 0x5a]);
+
+        await Assert.That(StoreSecurity.ProgramProblem(Path.Combine(Environment.SystemDirectory, "cmd.exe"), null)).IsNull();
+        await Assert.That(StoreSecurity.ProgramProblem(copy, null)).IsNotNull();
+    }
+
+    /// <summary>
     ///     %ProgramData% lets any user make a folder. One a player made where the store goes is refused, rather than
     ///     written to by the administrator's run (v1's elevated run trusted a folder the player owned).
     /// </summary>
@@ -308,4 +407,46 @@ public class UndoStoreTests
         await Assert.That(restore).DoesNotContain("SetSetting(drs.GlobalProfile()");
         await Assert.That(NvidiaDrs.IsCarriedSetting(0xDEADBEEF)).IsFalse();
     }
+
+    /// <summary>
+    ///     steamIds is checked against the signer the reader verified, not only the level: an identity-level backup
+    ///     signed by an account the policy does not name, or with no checked signer, is refused.
+    /// </summary>
+    [Test]
+    [Arguments("76561198000000002")]
+    [Arguments("")]
+    public async Task ASteamIdsPolicy_RefusesAnIdentityBackupFromASignerItDoesNotName(string signer)
+    {
+        OrganiserPolicy policy = OrganiserPolicy.Parse("""{ "minimumLevel": "identity", "steamIds": ["76561198000000001"] }"""u8.ToArray());
+
+        await Assert.That(policy.ArchiveProblem(Signed(signer.Length == 0 ? null : signer))).IsNotNull();
+        await Assert.That(policy.ArchiveProblem(Signed("76561198000000001"))).IsNull();
+    }
+
+    /// <summary>Windows' own tools save a policy with a byte order mark, or as UTF-16; its digest stays over the file's own bytes.</summary>
+    [Test]
+    public async Task APolicySavedWithAByteOrderMarkOrAsUtf16_IsRead()
+    {
+        const string json = """{ "sections": { "allow": ["cs2"] } }""";
+        byte[][] saved =
+        [
+            [.. Encoding.UTF8.GetPreamble(), .. Encoding.UTF8.GetBytes(json)],
+            [.. Encoding.Unicode.GetPreamble(), .. Encoding.Unicode.GetBytes(json)],
+            [.. Encoding.BigEndianUnicode.GetPreamble(), .. Encoding.BigEndianUnicode.GetBytes(json)]
+        ];
+
+        foreach (byte[] bytes in saved)
+        {
+            OrganiserPolicy policy = OrganiserPolicy.Parse(bytes);
+            await Assert.That(policy.Allows(Sections.Cs2)).IsTrue();
+            await Assert.That(policy.Allows(Sections.Cs2Game)).IsFalse();
+            await Assert.That(policy.Sha256).IsEqualTo(CS2OpenDev.ConfigManager.Archive.Dsse.Sha256Hex(bytes));
+        }
+    }
+
+    private static CS2OpenDev.ConfigManager.Archive.VerifiedArchive Signed(string? signer) => new(
+        new CS2OpenDev.ConfigManager.Archive.ArchiveManifest(CS2OpenDev.ConfigManager.Archive.ArchiveFormat.Format,
+            CS2OpenDev.ConfigManager.Archive.Platforms.WindowsX64, DateTimeOffset.UnixEpoch,
+            new CS2OpenDev.ConfigManager.Archive.ArchiveTool("test", "1"), null, [], []),
+        CS2OpenDev.ConfigManager.Archive.TrustLevel.Identity, "00", [], signer);
 }

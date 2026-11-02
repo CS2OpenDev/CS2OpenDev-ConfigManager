@@ -1,9 +1,10 @@
 #nullable disable
-#pragma warning disable
+#pragma warning disable CA1859
 // v1's C# 5 style; see the header of KeyValues.cs.
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -127,7 +128,7 @@ namespace CS2OpenDev.ConfigManager.Kit
             IntPtr pointer = IntPtr.Size == 8 ? QueryInterface64(id) : QueryInterface32(id);
             if (pointer == IntPtr.Zero)
             {
-                throw new NotSupportedException("This NVIDIA driver has no function 0x" + id.ToString("X8") + ".");
+                throw new NotSupportedException("This NVIDIA driver has no function 0x" + id.ToString("X8", CultureInfo.InvariantCulture) + ".");
             }
 
             // The generic overload: Native AOT builds each delegate's marshalling ahead of time, for every T used here.
@@ -140,6 +141,17 @@ namespace CS2OpenDev.ConfigManager.Kit
         /// </summary>
         public static string Initialize()
         {
+            bool mayPass;
+            return Initialize(out mayPass);
+        }
+
+        /// <summary>
+        ///     <see cref="Initialize()" />, also saying whether the reason may pass: false only for a PC with no NVIDIA
+        ///     driver or no NVIDIA GPU, where trying again later changes nothing.
+        /// </summary>
+        public static string Initialize(out bool mayPass)
+        {
+            mayPass = true;
             // A driver that is updating or recovering can block NVAPI's start for good; the caller gets a reason
             // after the timeout instead, and the stuck call is left on a background thread of its own.
             if (!Monitor.TryEnter(InitLock, InitTimeoutMs))
@@ -172,6 +184,7 @@ namespace CS2OpenDev.ConfigManager.Kit
                     _initialized = true;
                 }
 
+                mayPass = !_initPermanent;
                 return _initProblem;
             }
             finally
@@ -188,20 +201,56 @@ namespace CS2OpenDev.ConfigManager.Kit
 
         private static string _initProblem;
 
+        /// <summary>Whether <see cref="_initProblem" /> is one that stays: no NVIDIA driver, or no NVIDIA GPU.</summary>
+        private static bool _initPermanent;
+
+        /// <summary>NVAPI_LIBRARY_NOT_FOUND.</summary>
+        private const int LibraryNotFound = -2;
+
+        /// <summary>NVAPI_NVIDIA_DEVICE_NOT_FOUND.</summary>
+        private const int DeviceNotFound = -6;
+
+        /// <summary>
+        ///     Whether NvAPI_Initialize's <paramref name="status" /> stays so: no NVIDIA GPU, or no driver library. Any
+        ///     other failure may be a driver that is updating or recovering, so it is tried again later.
+        /// </summary>
+        internal static bool IsLastingInitStatus(int status)
+        {
+            return status == DeviceNotFound || status == LibraryNotFound;
+        }
+
+        /// <summary>Why NvAPI_Initialize's <paramref name="status" /> stopped NVAPI, or null for OK.</summary>
+        internal static string InitProblem(int status)
+        {
+            if (status == Ok)
+            {
+                return null;
+            }
+
+            return IsLastingInitStatus(status)
+                ? "no NVIDIA GPU drives a display here (NVAPI " + Inv.S(status) + ")"
+                : "the NVIDIA driver did not start (NVAPI " + Inv.S(status) + "); it may be updating or recovering";
+        }
+
         private static void InitializeOnWorker()
         {
+            // Each attempt says for itself whether its reason stays.
+            _initPermanent = false;
             try
             {
                 int status = Fn<NoArgs>(0x0150E828)();
-                _initProblem = status == Ok ? null : "no NVIDIA GPU drives a display here (NVAPI " + Inv.S(status) + ")";
+                _initProblem = InitProblem(status);
+                _initPermanent = IsLastingInitStatus(status);
             }
             catch (DllNotFoundException)
             {
                 _initProblem = "no NVIDIA driver is installed";
+                _initPermanent = true;
             }
             catch (EntryPointNotFoundException)
             {
                 _initProblem = "no NVIDIA driver is installed";
+                _initPermanent = true;
             }
             catch (BadImageFormatException)
             {
@@ -217,7 +266,7 @@ namespace CS2OpenDev.ConfigManager.Kit
             }
         }
 
-        /// <summary>Opens the settings database, or throws with the reason <see cref="Initialize" /> gave.</summary>
+        /// <summary>Opens the settings database, or throws with the reason <see cref="Initialize()" /> gave.</summary>
         public static NvidiaDrs Open()
         {
             string why = Initialize();

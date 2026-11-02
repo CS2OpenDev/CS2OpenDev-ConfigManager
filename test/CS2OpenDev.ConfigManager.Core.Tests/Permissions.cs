@@ -26,6 +26,35 @@ internal static class Permissions
             : UnixMode(root, UnixFileMode.UserRead | UnixFileMode.UserExecute);
     }
 
+    /// <summary>A folder this user may not add a file to, though its files stay writable: a cfg folder a cafe locks.</summary>
+    public static IDisposable NoNewFiles(string folder) =>
+        OperatingSystem.IsWindows()
+            ? DenyFolder(folder, FileSystemRights.CreateFiles)
+            : UnixMode(folder, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+    /// <summary>A folder this user may not list, though what is in it can still be reached by name.</summary>
+    public static IDisposable Unlistable(string folder) =>
+        OperatingSystem.IsWindows()
+            ? DenyFolder(folder, FileSystemRights.ListDirectory)
+            : UnixMode(folder, UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+    /// <summary>Denies <paramref name="rights" /> on the folder itself, not on what is in it.</summary>
+    [SupportedOSPlatform("windows")]
+    private static Undo DenyFolder(string folder, FileSystemRights rights)
+    {
+        DirectoryInfo dir = new(folder);
+        FileSystemAccessRule deny = new(WindowsIdentity.GetCurrent().User!, rights, AccessControlType.Deny);
+        DirectorySecurity acl = dir.GetAccessControl();
+        acl.AddAccessRule(deny);
+        dir.SetAccessControl(acl);
+        return new Undo(() =>
+        {
+            DirectorySecurity back = dir.GetAccessControl();
+            back.RemoveAccessRule(deny);
+            dir.SetAccessControl(back);
+        });
+    }
+
     [SupportedOSPlatform("windows")]
     private static Undo DenyFile(string path, FileSystemRights rights)
     {

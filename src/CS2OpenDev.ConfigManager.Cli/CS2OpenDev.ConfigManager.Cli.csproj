@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- acb, the restorer: verify, show, plan, restore, undo and backup, headless. Published Native AOT for win-x64
+    <!-- acb, the restorer: a wizard (acb alone) and verify, show, plan, restore, undo and backup, headless. Published Native AOT for win-x64
          and linux-x64, one binary with no .NET install. It reads only v2 archives, through Core's ArchiveReader. -->
     <PropertyGroup>
         <OutputType>Exe</OutputType>
@@ -17,6 +17,14 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="CS2OpenDev.ConfigManager.Cli.Tests"/>
+    </ItemGroup>
+
+    <!-- Windows loads a program's DLLs from its own folder before System32, unless the program says otherwise. acb
+         says otherwise (LOAD_LIBRARY_SEARCH_SYSTEM32 for the DLLs it imports), so a DLL put beside it, bcrypt.dll
+         say, never runs in the administrator's run. CI reads the flag back from the published binary
+         (.github/scripts/pe-load-flags.py). -->
+    <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+        <LinkerArg Include="/DEPENDENTLOADFLAG:0x800"/>
     </ItemGroup>
 
     <ItemGroup>

@@ -18,6 +18,17 @@ public class ArchiveV2Tests
 
     internal static readonly ArchiveTool Tool = new("Advanced Config Backup", "test");
 
+    /// <summary>The README inside every archive says --gsi is needed to restore GSI files, and never that a plan writes anything.</summary>
+    [Test]
+    public async Task TheReadme_NamesGsi_AndNeverSaysAPlanWrites()
+    {
+        string readme = BackupBuilder.Readme("Windows");
+
+        await Assert.That(readme).Contains("a restore writes them only when given --gsi");
+        await Assert.That(readme).Contains("Give --gsi to acb plan");
+        await Assert.That(readme).DoesNotContain("plan and restore write");
+    }
+
     [Test]
     public async Task ACaptureThatSavedNothing_WritesNoZip()
     {

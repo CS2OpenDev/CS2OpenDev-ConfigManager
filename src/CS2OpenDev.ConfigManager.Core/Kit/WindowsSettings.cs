@@ -1,5 +1,5 @@
 #nullable disable
-#pragma warning disable
+#pragma warning disable CA1720, CA1861
 // v1's C# 5 style; see the header of KeyValues.cs.
 
 using System;
@@ -377,6 +377,7 @@ namespace CS2OpenDev.ConfigManager.Kit
         ///     Reads one value under HKCU: <paramref name="kind" /> is dword, qword, string, expandstring or binary and
         ///     <paramref name="data" /> its text form. False when the value is absent.
         /// </summary>
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
         public static bool ReadRegistry(string subKey, string valueName, out string kind, out string data)
         {
             kind = null;
@@ -423,6 +424,7 @@ namespace CS2OpenDev.ConfigManager.Kit
         }
 
         /// <summary>Writes one value under HKCU, or deletes it when <paramref name="kind" /> is null.</summary>
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
         public static void WriteRegistry(string subKey, string valueName, string kind, string data)
         {
             if (kind == null)
@@ -720,6 +722,7 @@ namespace CS2OpenDev.ConfigManager.Kit
         // -- Elevation and the Windows user --------------------------------------------------------------
 
         /// <summary>The SID of the Windows user this process runs as, whose profile the per-user parts write.</summary>
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
         public static string CurrentUserSid()
         {
             using (System.Security.Principal.WindowsIdentity identity = System.Security.Principal.WindowsIdentity.GetCurrent())
@@ -729,6 +732,7 @@ namespace CS2OpenDev.ConfigManager.Kit
         }
 
         /// <summary>The user this process runs as, as DOMAIN\name.</summary>
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
         public static string CurrentUserName()
         {
             using (System.Security.Principal.WindowsIdentity identity = System.Security.Principal.WindowsIdentity.GetCurrent())
@@ -856,6 +860,7 @@ namespace CS2OpenDev.ConfigManager.Kit
         [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
         private static extern bool FindClose(IntPtr handle);
 
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
         public static bool IsAdministrator()
         {
             using (System.Security.Principal.WindowsIdentity identity = System.Security.Principal.WindowsIdentity.GetCurrent())

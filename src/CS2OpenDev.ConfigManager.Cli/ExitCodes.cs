@@ -18,7 +18,10 @@ internal static class ExitCodes
     /// <summary>A part failed; a restore put back what it had changed.</summary>
     public const int PartFailed = 3;
 
-    /// <summary>Undo records need attention: a rollback that failed, a record that cannot be read.</summary>
+    /// <summary>
+    ///     Undo records need attention: a rollback that failed, a record that cannot be read, an undo store that
+    ///     cannot be reached, or an administrator's run that ended without saying what it changed.
+    /// </summary>
     public const int RecordsNeedAttention = 4;
 
     public const int Usage = 64;
@@ -29,16 +32,20 @@ internal static class ExitCodes
         int code = Done;
         foreach (SectionResult result in results)
         {
-            code = Math.Max(code, result.Outcome switch
-            {
-                "failed" => PartFailed,
-                "deferred" or "admin" or "blocked" or "left" => PartsLeft,
-                _ => Done
-            });
+            code = Math.Max(code, For(result.Outcome));
         }
 
         return code;
     }
+
+    /// <summary>The code for one outcome. Every outcome is named here, and one that is not throws rather than passing as done.</summary>
+    public static int For(string outcome) => outcome switch
+    {
+        Outcomes.Done or Outcomes.Skipped => Done,
+        Outcomes.Deferred or Outcomes.Admin or Outcomes.Blocked or Outcomes.Left => PartsLeft,
+        Outcomes.Failed => PartFailed,
+        _ => throw new ArgumentException("Not an outcome: " + outcome, nameof(outcome))
+    };
 
     /// <summary>The code for an undo run over one store.</summary>
     public static int For(IReadOnlyList<RecordOutcome> outcomes)
@@ -46,6 +53,13 @@ internal static class ExitCodes
         int code = Done;
         foreach (RecordOutcome outcome in outcomes)
         {
+            // What a record set aside holds stays on the PC.
+            if (outcome.SetAside)
+            {
+                code = Math.Max(code, PartsLeft);
+                continue;
+            }
+
             if (outcome.Unreadable is not null)
             {
                 code = Math.Max(code, RecordsNeedAttention);

@@ -56,7 +56,7 @@
             <Button Content="Show in folder" Classes="ghost" Padding="10,4"
                     Command="{Binding RevealArchiveCommand}" />
             <Button Content="Check a backup" Classes="ghost" Padding="10,4" Click="OnCheck"
-                    ToolTip.Tip="Check that a backup zip is unchanged since it was made: every file against its manifest, nothing added or missing." />
+                    ToolTip.Tip="Check a backup zip: every file against its manifest, nothing added or missing. An unsigned backup can still have been edited by anyone." />
         </StackPanel>
 
         <TextBlock Foreground="{DynamicResource TextValue}" FontSize="11" TextWrapping="Wrap" Text="{Binding Status}" />
