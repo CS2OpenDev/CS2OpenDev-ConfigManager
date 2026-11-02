@@ -3,9 +3,8 @@
 # No credentials required: every dependency, the DemoViewer.NET extension SDK included, restores from
 # nuget.org, so forks and outside contributors get a working build.
 #
-# Both platforms the tool supports run the suites and publish acb Native AOT for their own runtime, so a trim
-# or AOT warning fails the build where it appears. Restores in the suites write only into fake Steam folders
-# and undo stores in temp; no test touches the runner's own Steam, registry, display or driver settings.
+# Both platforms run the suites, publish acb Native AOT (a trim or AOT warning fails the build) and run the
+# published binary end to end (.github/scripts/acb-smoke.sh).
 name: ci
 
 on:
@@ -58,3 +57,22 @@ jobs:
       - name: Publish acb (Native AOT)
         shell: bash
         run: dotnet publish src/CS2OpenDev.ConfigManager.Cli -c Release -r ${{ runner.os == 'Windows' && 'win-x64' || 'linux-x64' }}
+
+      # The administrator's run starts this binary from wherever it sits, so the DLLs it imports must come from
+      # System32 only, never from a file put beside it (the linker's dependent load flag, read back from the image).
+      - name: Check acb.exe loads its DLLs only from System32
+        if: runner.os == 'Windows'
+        shell: bash
+        run: python .github/scripts/pe-load-flags.py artifacts/publish/CS2OpenDev.ConfigManager.Cli/release_win-x64/acb.exe
+
+      # The suites run under the JIT; this runs the binary that ships (AOT, trimmed, invariant globalization,
+      # asInvoker manifest) end to end against fake Steam folders and an undo store in temp. Windows runners run
+      # jobs as an administrator, so there it checks that acb writes nothing through the Steam folder; the restore
+      # and undo legs run on Linux.
+      - name: Smoke-test the published acb
+        shell: bash
+        run: |
+          rid=${{ runner.os == 'Windows' && 'win-x64' || 'linux-x64' }}
+          exe=${{ runner.os == 'Windows' && 'acb.exe' || 'acb' }}
+          bash .github/scripts/acb-smoke.sh "artifacts/publish/CS2OpenDev.ConfigManager.Cli/release_$rid/$exe"
+
