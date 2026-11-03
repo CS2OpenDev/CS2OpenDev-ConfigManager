@@ -46,6 +46,16 @@ acb undo                                 put the PC back as it was
 back up, restore or put the PC back, step by step. Restoring shows each file a restore would change against
 this PC's copy and lets you untick parts and files; backing up shows which parts this PC has. `acb help` lists every option.
 
+The screens pick the usual answer for you, so pressing Enter through them works:
+
+- On Windows, double-click `acb.exe` to open them, or drop a backup onto `acb.exe` to go straight to restoring it.
+- Backing up saves every part this PC has, unsealed, to Documents under the date and time.
+- Restoring offers the newest backup in Documents, Desktop, Downloads or your home folder. A picked folder that
+  was unpacked from a backup means the zip beside it.
+- When the NVIDIA settings need an administrator, "Ask Windows" starts ticked, so Windows' own box asks. Saying
+  no there leaves only those settings.
+- If `acb` was double-clicked and ends with a message, its window waits for Enter instead of closing.
+
 Game state integration files (`gamestate_integration_*.cfg`) are restored only with `--gsi`, since they send
 live game data to the address they name.
 
@@ -65,8 +75,9 @@ event's policy to `acb backup --policy` too, which refuses up front a backup tha
 A signed backup whose signing key was later revoked is still shown, with a warning that its signature no longer
 proves who made it and that its files still match (so it is unchanged since it was made). `acb` asks before using
 it, or takes `--accept-revoked`; under a policy that needs a signature, only an administrator's `--accept-revoked`
-overrides the policy's refusal. `acb plan backup.zip
---report plan.json` saves a plan for `acb restore --plan plan.json`, which the same version of `acb` applies only
+overrides the policy's refusal.
+
+`acb plan backup.zip --report plan.json` saves a plan for `acb restore --plan plan.json`, which the same version of `acb` applies only
 while the PC still matches it (and with the same policy, given again); add `--dry-run` to check that without
 applying it.
 
@@ -78,7 +89,8 @@ another way on another PC does not open the seal.
 `acb backup -o backup.zip --self-contained` also carries `acb` itself in the backup (`restorer/acb.exe`, or
 `restorer/acb` on Linux), for a PC with nothing installed. Unpack the whole backup beside the zip (Extract All on
 Windows, `unzip backup.zip -d backup` on Linux) and run the restorer from that folder: it finds the zip and checks
-it as usual. Checking such a backup with another `acb` says whether its restorer is the same program.
+it as usual. On Windows you can also open the zip and double-click `restorer\acb.exe` in it: Windows runs a copy
+from a temp folder, and `acb` looks for the zip by name in Documents, Desktop, Downloads and your home folder. Checking such a backup with another `acb` says whether its restorer is the same program.
 
 ## Downloads
 

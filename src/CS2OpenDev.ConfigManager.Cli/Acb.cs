@@ -6,6 +6,7 @@ internal static class Acb
     public const string Usage = """
         Usage:
           acb                                              back up, restore or put this PC back on screen (needs a terminal)
+          acb <backup.zip>                                 the same, opening on restoring that backup (a zip dropped on acb)
           acb verify  <backup.zip> [--policy f] [--accept-revoked] [--json]
                                                            check it; say its trust level, when it was made, what it holds
           acb show    <backup.zip> [--section s | --file p]    list it, or print one part or one file
@@ -51,6 +52,9 @@ internal static class Acb
         was put back; 4 undo records need attention; 64 usage.
         """;
 
+    /// <summary>The run showed its screens, which the person closed themselves, rather than printing words.</summary>
+    public static bool ScreensShown { get; private set; }
+
     public static int Run(IReadOnlyList<string> args, AcbHost host)
     {
         ArgumentNullException.ThrowIfNull(args);
@@ -59,7 +63,8 @@ internal static class Acb
         {
             if (host.Interactive && host.Wizard is { } wizard)
             {
-                return wizard(host);
+                ScreensShown = true;
+                return wizard(host, null);
             }
 
             host.Err.WriteLine("acb on its own opens its screens, which need a terminal. Without one, use the commands:");
@@ -69,6 +74,22 @@ internal static class Acb
         }
 
         string command = args[0];
+        // A backup dropped on acb.exe, or opened with it, arrives as its path alone: open the screens on restoring it,
+        // which check it and ask before anything changes.
+        if (args.Count == 1 && IsBackupFile(command))
+        {
+            if (host.Interactive && host.Wizard is { } restore)
+            {
+                ScreensShown = true;
+                return restore(host, Path.GetFullPath(command));
+            }
+
+            host.Err.WriteLine($"To check that backup, run: acb verify \"{command}\". To restore it: acb restore \"{command}\".");
+            host.Err.WriteLine();
+            host.Err.WriteLine(Usage);
+            return ExitCodes.Usage;
+        }
+
         List<string> rest = [.. args.Skip(1)];
         try
         {
@@ -110,4 +131,8 @@ internal static class Acb
             return ExitCodes.Usage;
         }
     }
+
+    /// <summary>An existing .zip named alone: not a command, but a backup to open.</summary>
+    private static bool IsBackupFile(string arg) =>
+        !arg.StartsWith('-') && arg.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) && File.Exists(arg);
 }

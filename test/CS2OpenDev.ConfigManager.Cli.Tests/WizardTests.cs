@@ -67,7 +67,7 @@ public class WizardTests
             await Assert.That(flow.Results.Single(r => r.Section == Sections.Cs2Game).Detail).Contains("left alone, as chosen: sd_core.cfg");
             await Assert.That(flow.Results.Exists(r => r.Section == Sections.Launch)).IsFalse();
             await Assert.That(host.Records()).HasSingleItem();
-            await Assert.That(flow.DoneLines()).Contains("Done. To put this PC back as it was, run: acb undo");
+            await Assert.That(flow.DoneLines()).Contains("Done. " + RestoreFlow.UndoHint);
             await Assert.That(host.Run("undo", "--yes")).IsEqualTo(ExitCodes.Done).Because(host.All);
             await Assert.That(target.Read(FakeSteam.Cfg("autoexec.cfg"))).IsEqualTo("echo this pc");
         }
@@ -170,7 +170,7 @@ public class WizardTests
     [Test]
     public async Task Acb_WithNoCommand_RunsTheWizardOnlyAtATerminal()
     {
-        using TestHost host = new() { Wizard = _ => 42 };
+        using TestHost host = new() { Wizard = (_, _) => 42 };
 
         await Assert.That(host.Run()).IsEqualTo(ExitCodes.Usage).Because("there is no terminal to draw on");
         await Assert.That(host.Errors).Contains("need a terminal");

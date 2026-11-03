@@ -125,7 +125,10 @@ internal sealed class TestHost : IDisposable
     public bool Administrator { get; set; }
 
     /// <summary>Stands in for the wizard when acb is run with no command at a terminal.</summary>
-    public Func<AcbHost, int>? Wizard { get; set; }
+    public Func<AcbHost, string?, int>? Wizard { get; set; }
+
+    /// <summary>The folders acb looks in for a backup to offer; none unless a test gives some.</summary>
+    public List<string> BackupFolders { get; } = [];
 
     /// <summary>The registry, power plans and driver acb sees: in memory, never this PC's. Null leaves the engine's default, which refuses this PC in a test.</summary>
     public FakeMachine? Machine { get; set; } = new();
@@ -179,6 +182,7 @@ internal sealed class TestHost : IDisposable
             StartNvidia = StartNvidia,
             DriverTimeoutMs = DriverTimeoutMs,
             Wizard = Wizard,
+            BackupFolders = () => BackupFolders,
             Executable = Executable,
             IdentityService = IdentityService,
             IdentitySigner = Signer ?? ((_, _, _) => IdentitySigner),

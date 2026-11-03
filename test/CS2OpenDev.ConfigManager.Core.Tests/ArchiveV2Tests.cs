@@ -29,6 +29,20 @@ public class ArchiveV2Tests
         await Assert.That(readme).DoesNotContain("plan and restore write");
     }
 
+    /// <summary>The README says the easy way first: drop it on acb.exe on Windows (never on Linux), and for a carried restorer, double-click it in Explorer.</summary>
+    [Test]
+    public async Task TheReadme_SaysTheEasyWayToRestore_ForItsPlatform()
+    {
+        string windows = BackupBuilder.Readme(Platforms.WindowsX64, selfContained: true);
+        string linux = BackupBuilder.Readme(Platforms.LinuxX64, selfContained: true);
+
+        await Assert.That(windows).Contains("drop this file onto acb.exe, or run acb");
+        await Assert.That(windows).Contains("double-click the restorer in it");
+        await Assert.That(linux).Contains("To restore it, run acb and pick");
+        await Assert.That(linux).DoesNotContain("acb.exe");
+        await Assert.That(linux).DoesNotContain("Explorer");
+    }
+
     [Test]
     public async Task ACaptureThatSavedNothing_WritesNoZip()
     {

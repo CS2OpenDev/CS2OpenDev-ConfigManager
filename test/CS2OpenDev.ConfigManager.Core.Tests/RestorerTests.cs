@@ -135,6 +135,24 @@ public class RestorerTests
         await Assert.That(Restorers.HomeArchive(null)).IsNull();
     }
 
+    /// <summary>Explorer runs a restorer double-clicked inside the zip from a temp copy, Temp1_name.zip; the zip is found by that name.</summary>
+    [Test]
+    public async Task ARestorerRunFromInsideTheZip_FindsTheZipByName_InTheFoldersGiven()
+    {
+        using TempDir temp = new();
+        string exe = Path.Combine(temp.Sub("Temp"), "Temp1_AdvancedConfigBackup-20261102-180000.zip", "restorer", "acb.exe");
+        string downloads = temp.Sub("Downloads");
+        Directory.CreateDirectory(downloads);
+
+        await Assert.That(Restorers.ExplorerZipName(exe)).IsEqualTo("AdvancedConfigBackup-20261102-180000.zip");
+        await Assert.That(Restorers.ExplorerZipName(Path.Combine(temp.Sub("Temp1_x.zip"), "acb.exe"))).IsNull().Because("not in a restorer folder");
+        await Assert.That(Restorers.HomeArchive(exe, [downloads])).IsNull().Because("the zip is not in the folders given");
+
+        string zip = Path.Combine(downloads, "AdvancedConfigBackup-20261102-180000.zip");
+        File.WriteAllText(zip, "");
+        await Assert.That(Restorers.HomeArchive(exe, [temp.Sub("elsewhere"), downloads])).IsEqualTo(zip);
+    }
+
     [Test]
     public async Task OnlyAPublishedAcb_IsCarried()
     {

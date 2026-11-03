@@ -21,13 +21,16 @@ internal sealed class RestoreFlow
     private readonly HashSet<(string Section, string Relative)> _leftFiles = [];
     private string? _account;
 
-    public RestoreFlow(AcbHost host)
+    public RestoreFlow(AcbHost host, string? backup = null)
     {
         _host = host;
         Elevation = host.Elevation();
-        // A restorer unpacked from a self-contained backup offers that backup first.
-        ArchivePath = Restorers.HomeArchive(host.Executable) ?? "";
+        AskWindows = Elevation.CanAsk;
+        (ArchivePath, Found) = backup is not null ? (backup, "The backup acb was opened with.") : Archives.Offered(host);
     }
+
+    /// <summary>Why the backup in <see cref="ArchivePath" /> was offered before the person picked one; null when none was.</summary>
+    public string? Found { get; }
 
     public ElevationState Elevation { get; }
 
@@ -64,7 +67,10 @@ internal sealed class RestoreFlow
     /// <summary>Also writes the backup's gamestate_integration_*.cfg files (--gsi); asked in Choose when it holds any.</summary>
     public bool Gsi { get; private set; }
 
-    /// <summary>Whether the person picked "ask Windows for an administrator" for the NVIDIA settings in Pre-flight.</summary>
+    /// <summary>
+    ///     Whether to ask Windows for an administrator for the NVIDIA settings: ticked whenever Windows can ask, as
+    ///     Windows' own box is then the question, and saying no there leaves those settings.
+    /// </summary>
     public bool AskWindows { get; set; }
 
     /// <summary>
@@ -77,7 +83,7 @@ internal sealed class RestoreFlow
         _leftFiles.Clear();
         _account = null;
         Gsi = false;
-        AskWindows = false;
+        AskWindows = Elevation.CanAsk;
         return Reopen();
     }
 
@@ -344,13 +350,15 @@ internal sealed class RestoreFlow
         lines.Add("");
         lines.Add(ExitCode switch
         {
-            ExitCodes.Done => "Done. To put this PC back as it was, run: acb undo",
+            ExitCodes.Done => "Done. " + UndoHint,
             ExitCodes.Refused => "Nothing was changed.",
-            ExitCodes.RecordsNeedAttention => "Finished, but something needs attention (see above). To put this PC back as it was, run: acb undo",
-            _ => "Finished, with parts left as said above. To put this PC back as it was, run: acb undo"
+            ExitCodes.RecordsNeedAttention => "Finished, but something needs attention (see above). " + UndoHint,
+            _ => "Finished, with parts left as said above. " + UndoHint
         });
         return lines;
     }
+
+    internal const string UndoHint = "To put this PC back as it was, pick Put this PC back on the first screen (or run: acb undo)";
 
     private static (string Outcome, string Detail) Planned(RestoreSession session, string section)
     {
@@ -390,6 +398,19 @@ internal sealed class RestoreFlow
         {
             Refusal = "pick a backup file first.";
             return false;
+        }
+
+        // An unpacked backup is not what is restored, but the zip it came from usually sits beside it.
+        if (Directory.Exists(ArchivePath))
+        {
+            string zip = Path.TrimEndingDirectorySeparator(Path.GetFullPath(ArchivePath)) + ".zip";
+            if (!File.Exists(zip))
+            {
+                Refusal = "that is a folder; pick the backup's .zip file. An unpacked copy is never what acb restores, as its files could have been changed.";
+                return false;
+            }
+
+            ArchivePath = zip;
         }
 
         string passphrase = Passphrase;

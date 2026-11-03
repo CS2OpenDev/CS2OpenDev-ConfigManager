@@ -235,6 +235,43 @@ internal static class Archives
         }
     }
 
+    /// <summary>
+    ///     A backup to offer on the restore screen before the person picks one, and why it was picked: the one a
+    ///     carried restorer came in, else the newest acb backup in the usual folders. ("", null) when there is none.
+    ///     Only offered: it is checked like any other before anything changes.
+    /// </summary>
+    public static (string Path, string? Why) Offered(AcbHost host)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        IReadOnlyList<string> folders = host.BackupFolders();
+        if (Restorers.HomeArchive(host.Executable, folders) is { } home)
+        {
+            return (home, "The backup this restorer came in.");
+        }
+
+        (string Path, DateTime Written)? newest = null;
+        foreach (string folder in folders)
+        {
+            try
+            {
+                foreach (string zip in Directory.EnumerateFiles(folder, BackupBuilder.FileNamePrefix + "*.zip"))
+                {
+                    DateTime written = File.GetLastWriteTimeUtc(zip);
+                    if (newest is not { } best || written > best.Written)
+                    {
+                        newest = (zip, written);
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A folder that cannot be read just offers nothing.
+            }
+        }
+
+        return newest is { } found ? (found.Path, $"The newest backup in {Output.Printable(Path.GetDirectoryName(found.Path) ?? "")}.") : ("", null);
+    }
+
     public static string Version() =>
         typeof(Archives).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
             .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion.Split('+')[0] ?? "0.0.0";

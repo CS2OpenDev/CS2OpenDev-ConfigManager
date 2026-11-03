@@ -17,6 +17,13 @@ internal static class Dialogs
         }
 
         using OpenDialog dialog = new() { Title = title, OpenMode = OpenMode.File, AllowsMultipleSelection = false };
+        // Start where a saved or downloaded backup is, not wherever acb was started from.
+        string documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        if (documents.Length > 0 && Directory.Exists(documents))
+        {
+            dialog.Path = documents;
+        }
+
         app.Run(dialog);
         return dialog.Canceled || string.IsNullOrEmpty(dialog.Path) ? null : dialog.Path;
     }

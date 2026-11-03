@@ -7,9 +7,13 @@ namespace CS2OpenDev.ConfigManager;
 /// <summary>Captures this PC's settings and writes them as a v2 archive.</summary>
 public static class BackupBuilder
 {
+    /// <summary>How every backup acb names itself starts, so the restore screen can find one to offer.</summary>
+    public const string FileNamePrefix = "AdvancedConfigBackup-";
+
     /// <summary>The zip's name: the date and time only, so a copy left on another PC does not name this one.</summary>
+
     public static string DefaultFileName(DateTime now) =>
-        string.Create(System.Globalization.CultureInfo.InvariantCulture, $"AdvancedConfigBackup-{now:yyyyMMdd-HHmmss}.zip");
+        string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{FileNamePrefix}{now:yyyyMMdd-HHmmss}.zip");
 
     /// <summary>Whether a capture saved any part; without one no archive is written.</summary>
     public static bool HoldsAnything(RunReport report) => report is not null && report.Count("done") > 0;
@@ -108,7 +112,8 @@ public static class BackupBuilder
          unsigned (hash level) backup shows only that nothing was damaged or changed by accident: anyone
          could have edited it and rewritten its manifest.{(sealedWithPassphrase ? SealReadme : "")}
 
-         To check or restore it, use the restorer, acb:
+         To restore it, {(platform == Platforms.WindowsX64 ? "drop this file onto acb.exe, or " : "")}run acb and pick "Restore a backup".
+         From a terminal, the restorer acb also takes commands:
 
            acb verify <this file>     says how it is signed, when it was made, and that its files match
            acb plan <this file>       says what a restore would change, changing nothing
@@ -141,10 +146,17 @@ public static class BackupBuilder
               {unpack}
 
             then run {exe} from that folder. It finds this file beside the folder and checks it as
-            above; the unpacked copy is never what it restores. The restorer is a program, so run it only
-            from a backup whose source you trust. {trust}
+            above; the unpacked copy is never what it restores.{(windows ? Explorer : "")}
+
+            The restorer is a program, so run it only from a backup whose source you trust. {trust}
             """;
     }
+
+    private const string Explorer = """
+
+         Or open this file in Explorer and double-click the restorer in it: when this file is in
+         Documents, Desktop, Downloads or your home folder, it is found there too.
+         """;
 
     private const string SealReadme = """
 

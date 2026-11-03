@@ -666,8 +666,29 @@ build cannot know the releases after it.
 from where Windows' Extract All and `unzip x.zip -d x` put the folder: `dir/name/restorer/acb` proposes
 `dir/name.zip`, which the restore screen offers first and opens and checks like any other backup. If the zip is not there
 the restore screen asks for it as usual. The Linux entry is stored with mode 755, so `unzip` unpacks it runnable. Windows
-Explorer's "run from inside the zip" unpacks only the one program into a temp folder, where it finds no backup;
-the README inside the backup says to use Extract All.
+Explorer's "run from inside the zip" unpacks only the one program into `%TEMP%\Temp1_name.zip\restorer\`; from
+that folder name the restorer looks for `name.zip` in Documents, Desktop, Downloads and the home folder, where a
+downloaded or saved backup is, and the restore screen offers it as above. Elsewhere it is not found, so the README
+inside the backup still says to use Extract All.
+
+### The easy path
+
+The screens are built for a person who reads nothing and presses Enter. Each default is the usual answer, and
+none of them is riskier than asking, as every one still ends at a step that says what will change:
+
+- `acb <backup.zip>` (a zip dropped on `acb.exe`, or opened with it) opens the screens on restoring that backup.
+  Without a terminal it says the `verify` and `restore` commands instead.
+- Backing up ticks every part this PC has and saves unsealed to Documents, named by the date and time.
+- Restoring offers a backup before the person picks one: the one a carried restorer came in, else the newest
+  `AdvancedConfigBackup-*.zip` in Documents, Desktop, Downloads or the home folder, saying which. A folder picked
+  instead of a zip means the zip beside it of the same name, as a carried restorer's does; with none, the refusal
+  says to pick the zip. The browse box starts in Documents.
+- "Ask Windows for an administrator" starts ticked wherever Windows can ask, on restore and on undo. Windows' own
+  box is then the question; no there leaves only those settings, as before.
+- Done says to pick "Put this PC back" on the first screen, not only `acb undo`.
+- Double-clicked, Windows closes `acb`'s console window the moment it ends. When `acb` owns its window (the only
+  process on its console) and printed words instead of showing its screens, it waits for Enter first. An elevated
+  run never waits.
 
 The DemoViewer.NET plugin does not make self-contained backups: it would have to ship `acb` binaries for both
 platforms, and it cannot load until DemoViewer.NET can load it (see "Loading the plugin in DemoViewer.NET").

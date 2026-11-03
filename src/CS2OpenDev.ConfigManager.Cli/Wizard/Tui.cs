@@ -12,11 +12,21 @@ internal static class Tui
     ///     Runs until the person quits. The exit code is the last task's that did something, as the command would
     ///     have returned; refused when none did.
     /// </summary>
-    public static int Run(AcbHost host)
+    public static int Run(AcbHost host, string? backup)
     {
         using IApplication app = Application.Create();
         app.Init();
         int exitCode = ExitCodes.Refused;
+        if (backup is not null)
+        {
+            (int? code, bool quit) = Restore(app, host, backup);
+            exitCode = code ?? exitCode;
+            if (quit)
+            {
+                return exitCode;
+            }
+        }
+
         while (true)
         {
             HomeChoice choice;
@@ -29,7 +39,7 @@ internal static class Tui
             (int? code, bool quit) = choice switch
             {
                 HomeChoice.Backup => Backup(app, host),
-                HomeChoice.Restore => Restore(app, host),
+                HomeChoice.Restore => Restore(app, host, null),
                 HomeChoice.Undo => Undo(app, host),
                 _ => (null, true)
             };
@@ -49,9 +59,9 @@ internal static class Tui
         return (flow.Saved ? flow.ExitCode : null, screen.Shell.Quit);
     }
 
-    private static (int?, bool) Restore(IApplication app, AcbHost host)
+    private static (int?, bool) Restore(IApplication app, AcbHost host, string? backup)
     {
-        RestoreFlow flow = new(host);
+        RestoreFlow flow = new(host, backup);
         using RestoreScreen screen = new(flow);
         app.Run(screen.Shell.Window);
         return (flow.Applied ? flow.ExitCode : null, screen.Shell.Quit);

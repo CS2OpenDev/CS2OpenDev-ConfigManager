@@ -45,6 +45,7 @@ internal sealed class UndoFlow
     {
         _host = host;
         Elevation = host.Elevation();
+        AskWindows = Elevation.CanAsk;
     }
 
     public ElevationState Elevation { get; }

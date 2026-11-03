@@ -148,6 +148,29 @@ internal static class NativeLoading
 }
 
 /// <summary>
+///     Whether acb's console window is its own: started by double-clicking acb.exe (or dropping a file on it) rather
+///     than from a terminal. Windows closes such a window the moment acb ends, so anything acb said is lost unless
+///     it waits for the person first.
+/// </summary>
+internal static class ConsoleWindow
+{
+    public static bool IsOwnWindow()
+    {
+        if (!OperatingSystem.IsWindows() || Console.IsInputRedirected || Console.IsOutputRedirected)
+        {
+            return false;
+        }
+
+        uint[] processes = new uint[2];
+        return GetConsoleProcessList(processes, (uint)processes.Length) == 1;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern uint GetConsoleProcessList([Out] uint[] processList, uint processCount);
+}
+
+/// <summary>
 ///     What came back from an elevated run. <paramref name="Started" />: the administrator's run was started, so
 ///     without a report what it changed is unknown.
 /// </summary>

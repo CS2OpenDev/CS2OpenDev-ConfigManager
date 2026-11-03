@@ -52,14 +52,14 @@ internal sealed class RestoreScreen : IDisposable
         _archive.Text = flow.ArchivePath;
         _policy.Text = flow.PolicyPath;
         _steam.Text = flow.SteamPath;
-        if (flow.ArchivePath.Length > 0)
+        if (flow.Found is { } found)
         {
-            _found.Text = "The backup this restorer came in, found beside its folder.";
+            _found.Text = found + " Press Next to check it, or Browse for another.";
         }
 
         _browse.Accepting += (_, e) =>
         {
-            if (PickFile("Pick a backup") is { } picked)
+            if (PickFile("Pick a backup (a .zip file)") is { } picked)
             {
                 _archive.Text = picked;
             }
@@ -121,6 +121,7 @@ internal sealed class RestoreScreen : IDisposable
         _flow.SteamPath = _steam.Text.Trim();
         _flow.Passphrase = "";
         bool open = _flow.Check();
+        _archive.Text = _flow.ArchivePath;
         for (int tries = 0; !open && _flow.SealRefusal is { } seal && tries < RestoreSession.PassphraseTries; tries++)
         {
             if (AskPassphrase(seal == SealNotOpenedException.WrongMessage) is not { } passphrase)

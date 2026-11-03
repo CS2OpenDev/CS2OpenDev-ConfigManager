@@ -91,8 +91,17 @@ internal sealed class AcbHost
     /// <summary>This acb's own program file: what <c>backup --self-contained</c> carries, and what a carried restorer is compared with.</summary>
     public string? Executable { get; init; }
 
-    /// <summary>Runs the wizard on the terminal and returns its exit code; null where there is no screen to draw on (tests).</summary>
-    public Func<AcbHost, int>? Wizard { get; init; }
+    /// <summary>
+    ///     Runs the wizard on the terminal and returns its exit code; null where there is no screen to draw on (tests).
+    ///     Given a backup file (one dropped on acb, say), it opens on restoring that backup instead of the home screen.
+    /// </summary>
+    public Func<AcbHost, string?, int>? Wizard { get; init; }
+
+    /// <summary>
+    ///     Where a person's backups usually are, looked in for one to offer when none is named: Documents (where acb
+    ///     saves them), Desktop, Downloads and the home folder. Tests give their own.
+    /// </summary>
+    public Func<IReadOnlyList<string>> BackupFolders { get; init; } = UsualFolders;
 
     /// <summary>Called with the record's folder just before a failed part is rolled back. Tests only.</summary>
     internal Action<string>? BeforeRollback { get; init; }
@@ -158,6 +167,7 @@ internal sealed class AcbHost
         ConnectElevated = ConnectElevated,
         Now = Now,
         Executable = Executable,
+        BackupFolders = BackupFolders,
         IsAdministrator = IsAdministrator,
         IdentityService = IdentityService,
         IdentitySigner = IdentitySigner,
@@ -168,6 +178,20 @@ internal sealed class AcbHost
         StartNvidia = StartNvidia,
         DriverTimeoutMs = DriverTimeoutMs
     };
+
+    private static List<string> UsualFolders()
+    {
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        List<string> folders =
+            [Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)];
+        if (home.Length > 0)
+        {
+            folders.Add(Path.Combine(home, "Downloads"));
+            folders.Add(home);
+        }
+
+        return [.. folders.Where(f => f.Length > 0).Distinct(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)];
+    }
 
     private static readonly string[] SshVariables = ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"];
 

@@ -157,7 +157,7 @@ public class TuiTests
         await Assert.That(flow.IsChosen(Sections.Cs2)).IsFalse();
 
         await Assert.That(restore.Shell.Next()).IsTrue();
-        await Assert.That(screen.Text("restore done")).Contains("To put this PC back as it was, run: acb undo");
+        await Assert.That(screen.Text("restore done")).Contains("pick Put this PC back on the first screen");
         await Assert.That(flow.ExitCode).IsEqualTo(ExitCodes.Done);
         await Assert.That(restore.Shell.Back()).IsFalse().Because("once applied, the task stays on Done");
 
