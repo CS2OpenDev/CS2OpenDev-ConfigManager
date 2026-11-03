@@ -110,25 +110,25 @@ AdvancedConfigBackup-<yyyyMMdd-HHmm>.zip
   files/cs2game/...   relative to game/csgo/cfg
 ```
 
-`backup.vdf` holds `format` (1), `kind` (`backup` or `undo`), `created`, `creator`, then one section
-per part. `cs2` and `launch` each name the account they came from; an undo snapshot also holds `user`, the
-SID of the Windows user the restore ran as. Files are listed with their SHA-256, and every file of a part
-is checked, and every merged file built, before the first is written; a damaged copy fails its part and
-writes nothing for it. The same first pass opens each existing target with the rights the swap uses
-(write, write-attributes and delete; a read-only target has its attribute cleared for the check and put
-back), so a file another user owns, an ACL denies, or a program holds open also fails the part before any
-write. A failure the check cannot foresee (the folder itself refusing the temporary copy, say) can still
-stop a part partway; every file is on the undo record before it is written, so the undo puts it back. Files are written through a
-temporary copy that is flushed to the disk (`FileOptions.WriteThrough` and `Flush(true)`) and then swapped
-in (`SafeFile`), and the swapped-in file is flushed again, which on NTFS commits the rename. So a process
-killed mid-write, a power loss or a bugcheck leaves the old file or the new one, never a torn or
-zero-filled `localconfig.vdf`. The undo record is written the same way: the snapshot's `backup.vdf`
-(including the first one, which claims the folder), every file copy in it and the `localconfig.vdf` copy
-are on the disk before the change they record, so a registry hive or the NVIDIA settings store that
-persists a change cannot get ahead of its record. For the undo record the flush after the swap is not
-best effort: if it fails, the change it guards is not made (`SafeFile.WriteRecord`). A read-only target (a common way to stop CS2 resetting
-`cs2_video.txt`) is written and stays read-only: `SafeFile` clears the attribute for the swap and puts it
-back. Undo snapshot copies never carry the attribute, so an undo writes them back the same way.
+`backup.vdf` holds `format` (1), `kind` (`backup` or `undo`), `created`, `creator`, then one section per part.
+`cs2` and `launch` each name the account they came from; an undo snapshot also holds `user`, the SID of the
+Windows user the restore ran as. Files are listed with their SHA-256, and every file of a part is checked, and
+every merged file built, before the first is written; a damaged copy fails its part and writes nothing for it.
+The same first pass opens each existing target with the rights the swap uses (write, write-attributes and
+delete; a read-only target has its attribute cleared for the check and put back), so a file another user owns,
+an ACL denies, or a program holds open also fails the part before any write. A failure the check cannot
+foresee (the folder itself refusing the temporary copy, say) can still stop a part partway; every file is on
+the undo record before it is written, so the undo puts it back. Files are written through a temporary copy
+that is flushed to the disk (`FileOptions.WriteThrough` and `Flush(true)`) and then swapped in (`SafeFile`),
+and the swapped-in file is flushed again, which on NTFS commits the rename. So a process killed mid-write, a
+power loss or a bugcheck leaves the old file or the new one, never a torn or zero-filled `localconfig.vdf`.
+The undo record is written the same way: the snapshot's `backup.vdf` (including the first one, which claims
+the folder), every file copy in it and the `localconfig.vdf` copy are on the disk before the change they
+record, so a registry hive or the NVIDIA settings store that persists a change cannot get ahead of its record.
+For the undo record the flush after the swap is not best effort: if it fails, the change it guards is not made
+(`SafeFile.WriteRecord`). A read-only target (a common way to stop CS2 resetting `cs2_video.txt`) is written
+and stays read-only: `SafeFile` clears the attribute for the swap and puts it back. Undo snapshot copies never
+carry the attribute, so an undo writes them back the same way.
 
 Capture reads each file, takes passwords out in memory, and writes the staged copy once as a new file, so
 an unfiltered copy never reaches the disk and a read-only source does not make a read-only copy. A part
@@ -145,7 +145,7 @@ parts. The `nvidia` and `vibrance` capture parts run whole on a background threa
 (`ConfigBackup.RunOnDriverWorker`), writing into a manifest of their own that joins the backup only once
 the part finishes. The save waits up to 60 seconds and watches for a cancel; past that, or on a cancel,
 the part fails and the thread is left to finish alone, and while it is still running no later part or save
-calls the driver again (each such part fails, saying to restart DemoViewer). `NvidiaDrs.Initialize` has its
+calls the driver again (each such part fails, saying to start the program again). `NvidiaDrs.Initialize` has its
 own 30-second limit inside that, and `powercfg` is stopped after 30 seconds, so a hang fails its part
 rather than holding the app's job queue. A cancelled save reads "The backup was cancelled." A native
 crash inside `nvapi64.dll` still ends the process: the driver calls run in DemoViewer's own process, not

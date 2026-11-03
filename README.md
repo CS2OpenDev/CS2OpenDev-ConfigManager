@@ -7,8 +7,8 @@ move between PCs at internet cafes, LAN events and tournaments, and for the orga
 It is a standalone tool first. A first-party [DemoViewer.NET](https://github.com/sid2934/DemoViewer.NET) plugin,
 built from this repository, makes backups from inside the app.
 
-> Status: early development. The headless restorer `acb` checks, shows, plans, restores and undoes backups,
-> and makes them; the step-by-step wizard comes next. See [docs/design.md](docs/design.md) for the design and
+> Status: early development. The restorer `acb` checks, shows, plans, restores and undoes backups, and makes
+> them, headless or through a step-by-step restore wizard. See [docs/design.md](docs/design.md) for the design and
 > plan.
 
 ## What it saves
@@ -22,29 +22,56 @@ built from this repository, makes backups from inside the app.
 | `nvidia`, `vibrance` | NVIDIA 3D settings for CS2's profile, digital vibrance |
 
 Passwords and server tokens are removed before anything is written. Archives are plain text you can open and
-read, and any change to them after they are made is detected and refused. A backup restores only on the
-platform it was made on (Windows x64 or Linux x64). [docs/v1-reference.md](docs/v1-reference.md) has the full
+read. A file that does not match the archive's manifest is detected and the archive refused; an unsigned
+(`hash` level) archive proves only that, since anyone can edit it and rewrite its manifest. A backup sealed with
+a passphrase (`seal` level, `acb backup --seal`, or the plugin's "Seal the backup" box) opens only with that
+passphrase, which shows it was made by someone who knows it and is unchanged since. A backup restores
+only on the platform it was made on (Windows x64 or Linux x64). [docs/v1-reference.md](docs/v1-reference.md) has the full
 list of what is saved, what is left out on purpose, and why.
 
 ## Using acb
 
 ```
+acb                                      the wizard: restore step by step, or undo a restore
 acb backup -o backup.zip                 save this PC's settings
-acb verify backup.zip                    check it: who made it, when, and that nothing was changed
+acb backup -o backup.zip --seal          the same, sealed with a passphrase (Enter alone makes six random words)
+acb verify backup.zip                    check it: its trust level, when it was made, that its files match
 acb plan backup.zip                      what a restore would change, changing nothing
 acb restore backup.zip                   restore it, recording what it replaces
 acb undo                                 put the PC back as it was
 ```
 
-`acb` with no command lists every option. It runs as the person who started it; on Windows only the NVIDIA
-settings need an administrator, and `acb` says so up front and asks before Windows does. An organiser can pass a
-policy file (`--policy`) that only narrows what is restored.
+`acb` with no command at a terminal starts the wizard, which shows each file a restore would change against
+this PC's copy and lets you untick parts and files. `acb help` lists every option.
+
+Game state integration files (`gamestate_integration_*.cfg`) are restored only with `--gsi`, since they send
+live game data to the address they name.
+
+`acb undo` writes back into the Steam folder each restore wrote to. If that folder is gone for good,
+`acb undo --set-aside <record>` lets the record go; an administrator can do the same for NVIDIA settings a
+driver will no longer take back.
+
+`acb` runs as the person who started it. On Windows only the NVIDIA settings need an administrator: `acb` says so
+up front and asks before Windows does, and on a PC with no NVIDIA driver that part is skipped. Windows is asked
+only for a copy of `acb.exe` in a folder nobody but administrators can change (such as `C:\Program Files\acb`).
+`acb` run as an administrator writes nothing into the Steam folder, so run it without administrator for those
+parts (on a PC where User Account Control is off, from a standard Windows account).
+
+An organiser can pass a policy file (`--policy`) that only narrows what is restored. `acb plan backup.zip
+--report plan.json` saves a plan for `acb restore --plan plan.json`, which the same version of `acb` applies only
+while the PC still matches it (and with the same policy, given again); add `--dry-run` to check that without
+applying it.
+
+A sealed backup asks for its passphrase at the terminal, or reads it from `--passphrase-file` (its first line;
+`-` for standard input). A passphrase needs at least 12 characters, and anyone holding the backup can try
+passphrases against it, so a generated one is safest. It is taken exactly as typed, so an accented letter typed
+another way on another PC does not open the seal.
 
 ## Layout
 
 ```
 src/CS2OpenDev.ConfigManager.Core/            capture and restore engine, rules, archive format, undo store
-src/CS2OpenDev.ConfigManager.Cli/             acb, the restorer (Native AOT, win-x64 and linux-x64)
+src/CS2OpenDev.ConfigManager.Cli/             acb, the restorer and its wizard (Native AOT, win-x64 and linux-x64)
 plugin/CS2OpenDev.ConfigManager.DemoViewer/   the DemoViewer.NET plugin
 test/                                         TUnit suites
 docs/                                         design of record and reference
@@ -71,4 +98,5 @@ fake Steam folder and an undo store in temp, and the administrator's prompt is a
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Third-party parts, among them the EFF word list generated passphrases are drawn
+from, are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
