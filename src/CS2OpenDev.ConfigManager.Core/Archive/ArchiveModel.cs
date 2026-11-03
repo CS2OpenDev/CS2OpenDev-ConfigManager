@@ -87,8 +87,12 @@ public sealed record DigestSet([property: JsonPropertyName("sha256")] string Sha
 
 public sealed record StatementSubject(string Name, DigestSet Digest);
 
-/// <summary>The level, and at the seal level how its key was made from the passphrase (absent below it).</summary>
-public sealed record TrustPredicate(string Level, SealKdf? Kdf = null);
+/// <summary>
+///     The level, and what checking it needs: at the seal level how its key was made from the passphrase; at the
+///     identity level the Steam account, when it was signed, and the delegation of the key that signed it.
+/// </summary>
+public sealed record TrustPredicate(string Level, SealKdf? Kdf = null, string? SteamId64 = null, DateTimeOffset? SignedAt = null,
+    DsseEnvelope? Delegation = null);
 
 /// <summary>The in-toto style statement a DSSE envelope carries: which manifest, at which trust level.</summary>
 public sealed record Statement(
@@ -111,6 +115,7 @@ public sealed record DsseEnvelope(string PayloadType, string Payload, IReadOnlyL
 [JsonSerializable(typeof(ArchiveManifest))]
 [JsonSerializable(typeof(Statement))]
 [JsonSerializable(typeof(DsseEnvelope))]
+[JsonSerializable(typeof(Delegation))]
 internal sealed partial class ArchiveJson : JsonSerializerContext
 {
     /// <summary>

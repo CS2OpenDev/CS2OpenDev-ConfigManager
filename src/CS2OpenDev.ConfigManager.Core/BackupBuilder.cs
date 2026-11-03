@@ -18,10 +18,11 @@ public static class BackupBuilder
     ///     Captures into a private temp folder, then writes <paramref name="zipPath" /> from only what the capture
     ///     record lists, so the copies of a part that failed never reach the archive. No archive is written when no
     ///     part was captured; the report says why. With <paramref name="seal" /> the archive is sealed with it, and
-    ///     with <paramref name="restorer" /> it carries those bytes as its restorer (self-contained).
+    ///     with <paramref name="restorer" /> it carries those bytes as its restorer (self-contained). With
+    ///     <paramref name="identity" /> it is signed for a Steam account instead of sealed.
     /// </summary>
     public static RunReport Create(CaptureOptions options, string zipPath, ArchiveTool tool, DateTimeOffset now, CancellationToken ct,
-        SealKey? seal = null, byte[]? restorer = null)
+        SealKey? seal = null, byte[]? restorer = null, IIdentitySigner? identity = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         string platform = ArchiveFormat.CurrentPlatform
@@ -64,7 +65,7 @@ public static class BackupBuilder
                 .Select(r => new ArchiveSection(r.Section, Sections.Label(r.Section), string.IsNullOrEmpty(r.Detail) ? null : [r.Detail]))];
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(zipPath))!);
             ArchiveWriter.Write(pack, zipPath, new ArchiveContent(platform, tool, account, sections, Readme(platform, seal is not null, restorer is not null)), now, ct,
-                seal, restorer);
+                seal, restorer, identity);
             return report;
         }
         finally

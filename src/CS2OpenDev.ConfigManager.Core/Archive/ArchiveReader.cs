@@ -43,11 +43,12 @@ public sealed class VerifiedArchive
     private readonly Dictionary<string, byte[]> _entries;
 
     internal VerifiedArchive(ArchiveManifest manifest, TrustLevel level, string manifestSha256, Dictionary<string, byte[]> entries,
-        string? signer = null, SealKey? sealKey = null)
+        string? signer = null, SealKey? sealKey = null, IdentitySigner? identity = null)
     {
         Manifest = manifest;
         Level = level;
         Signer = signer;
+        IdentitySigner = identity;
         SealKey = sealKey;
         ManifestSha256 = manifestSha256;
         _entries = entries;
@@ -62,6 +63,9 @@ public sealed class VerifiedArchive
     ///     says about its own account is never a signer.
     /// </summary>
     public string? Signer { get; }
+
+    /// <summary>Who signed it and when, with which key, at the identity level; null below it.</summary>
+    public IdentitySigner? IdentitySigner { get; }
 
     /// <summary>The key that opened a sealed archive, so a second run (the administrator's) need not ask again; null below the seal level.</summary>
     public SealKey? SealKey { get; }
@@ -131,14 +135,24 @@ public static class ArchiveReader
         }
 
         string manifestSha = Dsse.Sha256Hex(manifestBytes);
-        (TrustLevel level, SealKey? key) = VerifyEnvelope(envelopeBytes, manifestSha, options);
+        (TrustLevel level, SealKey? key, IdentitySigner? signer) = VerifyEnvelope(envelopeBytes, manifestSha, options);
         if (level < options.MinimumLevel)
         {
             throw new ArchiveRejectedException($"This backup is at the '{Name(level)}' level and at least '{Name(options.MinimumLevel)}' is required.");
         }
 
         VerifyEntries(manifest, raw);
-        return new VerifiedArchive(manifest, level, manifestSha, raw, sealKey: key);
+        return new VerifiedArchive(manifest, level, manifestSha, raw, signer?.SteamId64, key, signer);
+    }
+
+    /// <summary>Checks an envelope for a manifest at <paramref name="level" />, throwing what a reader would refuse it for.</summary>
+    internal static void CheckEnvelope(byte[] envelopeBytes, string manifestSha, TrustLevel level)
+    {
+        (TrustLevel got, _, _) = VerifyEnvelope(envelopeBytes, manifestSha, new ArchiveReadOptions());
+        if (got != level)
+        {
+            throw new ArchiveRejectedException($"it is at the '{Name(got)}' level, not '{Name(level)}'");
+        }
     }
 
     public static string Name(TrustLevel level) => level switch
@@ -240,7 +254,7 @@ public static class ArchiveReader
         }
     }
 
-    private static (TrustLevel, SealKey?) VerifyEnvelope(byte[] envelopeBytes, string manifestSha, ArchiveReadOptions options)
+    private static (TrustLevel, SealKey?, IdentitySigner?) VerifyEnvelope(byte[] envelopeBytes, string manifestSha, ArchiveReadOptions options)
     {
         DsseEnvelope envelope = Parse(envelopeBytes, ArchiveJson.Strict.DsseEnvelope, ArchiveFormat.SignatureEntry);
         if (envelope.PayloadType != ArchiveFormat.PayloadType)
@@ -273,16 +287,21 @@ public static class ArchiveReader
         {
             case "hash":
                 // A signature on a hash-level statement would claim more than the level says; refuse the ambiguity.
-                if (envelope.Signatures.Count != 0 || statement.Predicate.Kdf is not null)
+                if (envelope.Signatures.Count != 0 || statement.Predicate is not { Kdf: null, SteamId64: null, SignedAt: null, Delegation: null })
                 {
-                    throw new ArchiveRejectedException("The backup says it is unsigned but carries a signature or a seal's settings.");
+                    throw new ArchiveRejectedException("The backup says it is unsigned but carries a signature, a seal's settings or a signer.");
                 }
 
-                return (TrustLevel.Hash, null);
+                return (TrustLevel.Hash, null, null);
             case "seal":
-                return (TrustLevel.Seal, VerifySeal(envelope, payload, statement.Predicate.Kdf, options));
+                if (statement.Predicate is not { SteamId64: null, SignedAt: null, Delegation: null })
+                {
+                    throw new ArchiveRejectedException("The backup says it is sealed but also names a signer.");
+                }
+
+                return (TrustLevel.Seal, VerifySeal(envelope, payload, statement.Predicate.Kdf, options), null);
             case "identity":
-                throw new ArchiveRejectedException($"This backup is at the '{statement.Predicate.Level}' level, which this version cannot check yet.");
+                return (TrustLevel.Identity, null, Identity.Verify(envelope, payload, statement.Predicate, IdentityTrust.Current, DateTimeOffset.UtcNow));
             default:
                 throw new ArchiveRejectedException($"The backup claims a trust level '{statement.Predicate.Level}' this version does not know.");
         }

@@ -24,8 +24,13 @@ public static class ArchiveWriter
     ///     place only when complete; an existing file there is never replaced.
     /// </summary>
     public static ArchiveManifest Write(string stagingDir, string zipPath, ArchiveContent content, DateTimeOffset created, CancellationToken ct,
-        SealKey? seal = null, byte[]? restorer = null)
+        SealKey? seal = null, byte[]? restorer = null, IIdentitySigner? identity = null)
     {
+        if (seal is not null && identity is not null)
+        {
+            throw new ArgumentException("A backup is sealed or signed for a Steam account, not both.", nameof(identity));
+        }
+
         if (!Platforms.IsKnown(content.Platform))
         {
             throw new ArgumentException($"Unknown platform '{content.Platform}'.", nameof(content));
@@ -76,7 +81,7 @@ public static class ArchiveWriter
         ArchiveManifest manifest = new(ArchiveFormat.Format, content.Platform, created.ToUniversalTime(), content.Tool,
             content.SteamAccount, content.Sections, entries);
         byte[] manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifest, ArchiveJson.Strict.ArchiveManifest);
-        byte[] envelopeBytes = Envelope(manifestBytes, seal);
+        byte[] envelopeBytes = identity is null ? Envelope(manifestBytes, seal) : Signed(manifestBytes, content, identity);
 
         string partial = zipPath + ".partial";
         File.Delete(partial);
@@ -128,6 +133,27 @@ public static class ArchiveWriter
         {
             throw new IOException($"A backup holds at most {ArchiveFormat.MaxTotalBytes / (1024 * 1024)} MB.");
         }
+    }
+
+    /// <summary>
+    ///     The signer's envelope, checked here as any reader checks it (against this build's roots, for this manifest)
+    ///     before it is written, so no backup goes out that its own acb would refuse.
+    /// </summary>
+    private static byte[] Signed(byte[] manifestBytes, ArchiveContent content, IIdentitySigner identity)
+    {
+        string manifestSha = Dsse.Sha256Hex(manifestBytes);
+        DsseEnvelope envelope = identity.Sign(manifestSha, content.Platform, content.Tool);
+        byte[] envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, ArchiveJson.Strict.DsseEnvelope);
+        try
+        {
+            ArchiveReader.CheckEnvelope(envelopeBytes, manifestSha, TrustLevel.Identity);
+        }
+        catch (ArchiveRejectedException ex)
+        {
+            throw new IOException("The signature the service returned does not check: " + ex.Message, ex);
+        }
+
+        return envelopeBytes;
     }
 
     private static byte[] Envelope(byte[] manifestBytes, SealKey? seal)

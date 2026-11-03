@@ -213,9 +213,9 @@ public class ArchiveV2Tests
 
     [Test]
     [Arguments("seal", "names no key settings")]
-    [Arguments("identity", "cannot check yet")]
+    [Arguments("identity", "does not carry the account, the time and the delegation")]
     [Arguments("trust-me", "does not know")]
-    public async Task ALevelThisVersionCannotCheck_IsRefused(string level, string expected)
+    public async Task ALevelWithoutWhatCheckingItNeeds_IsRefused(string level, string expected)
     {
         using TempDir temp = new();
         string zip = Write(temp);
@@ -319,7 +319,7 @@ public class ArchiveV2Tests
     private static async Task Refused(string zip, string expected) =>
         await Assert.That(() => ArchiveReader.Open(zip, AnyPlatform)).Throws<ArchiveRejectedException>().WithMessageContaining(expected);
 
-    internal static string Write(TempDir temp, string? zip = null, SealKey? seal = null)
+    internal static string Write(TempDir temp, string? zip = null, SealKey? seal = null, IIdentitySigner? identity = null)
     {
         string staging = temp.Sub("staging");
         if (!Directory.Exists(staging))
@@ -333,7 +333,7 @@ public class ArchiveV2Tests
         zip ??= temp.Sub("backup.zip");
         ArchiveContent content = new(Platforms.WindowsX64, new ArchiveTool("Advanced Config Backup", "test"), "69413322",
             [new ArchiveSection("cs2", "Settings for account 69413322's CS2 'slot 0'")], "Advanced Config Backup\n");
-        ArchiveWriter.Write(staging, zip, content, Created, CancellationToken.None, seal);
+        ArchiveWriter.Write(staging, zip, content, Created, CancellationToken.None, seal, identity: identity);
         return zip;
     }
 
