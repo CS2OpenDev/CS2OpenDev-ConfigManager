@@ -40,6 +40,12 @@ internal sealed class CommandReport
 
     public string? SteamAccount { get; set; }
 
+    /// <summary>The SHA-256 of the restorer a self-contained backup carries; null when it carries none.</summary>
+    public string? RestorerSha256 { get; set; }
+
+    /// <summary>Whether that restorer is byte for byte the acb that made the report.</summary>
+    public bool? RestorerIsThisAcb { get; set; }
+
     public List<string>? Only { get; set; }
 
     public string? Account { get; set; }

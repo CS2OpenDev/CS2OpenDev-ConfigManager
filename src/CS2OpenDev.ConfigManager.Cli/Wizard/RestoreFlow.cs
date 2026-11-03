@@ -25,6 +25,8 @@ internal sealed class RestoreFlow
     {
         _host = host;
         Elevation = host.Elevation();
+        // A restorer unpacked from a self-contained backup offers that backup first.
+        ArchivePath = Restorers.HomeArchive(host.Executable) ?? "";
     }
 
     public ElevationState Elevation { get; }
@@ -93,6 +95,10 @@ internal sealed class RestoreFlow
             }
 
             lines.Add("Digest:   " + archive.ManifestSha256);
+            if (Archives.RestorerLine(archive, _host) is { } restorer)
+            {
+                lines.Add(restorer);
+            }
         }
 
         if (Session?.Policy is { } policy)

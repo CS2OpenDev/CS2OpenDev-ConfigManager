@@ -84,6 +84,28 @@ fi
 expect 0 --version
 expect 0 backup -o "$zip" --only cs2,cs2game,launch --steam-path "$source_root"
 expect 0 verify "$zip"
+
+# A self-contained backup carries this binary. Unpacked the way Extract All and unzip -d do it, the carried copy
+# runs on its own (nothing else in its folder) and says it is the same program as the one that made the backup.
+sc="$work/AdvancedConfigBackup-smoke"
+expect 0 backup -o "$(native "$sc.zip")" --only cs2game --steam-path "$source_root" --self-contained
+expect 0 verify "$(native "$sc.zip")"
+says "Restorer: restorer/"
+if [ "$(uname -s)" = "Linux" ]; then
+    unzip -q "$sc.zip" -d "$sc"
+    if [ ! -x "$sc/restorer/acb" ]; then
+        echo "restorer/acb did not unpack runnable" >&2
+        exit 1
+    fi
+    carried="$sc/restorer/acb"
+else
+    powershell.exe -NoProfile -Command "Expand-Archive -LiteralPath '$(native "$sc.zip")' -DestinationPath '$(native "$sc")'"
+    carried="$sc/restorer/acb.exe"
+fi
+"$carried" verify "$(native "$sc.zip")" > "$work/out.txt" 2>&1 || { cat "$work/out.txt"; echo "the carried restorer failed" >&2; exit 1; }
+says "the same program as this acb"
+echo "ok: the carried restorer runs alone and is this acb"
+
 if [ "$elevated" = 1 ]; then
     expect 2 plan "$zip" --json --steam-path "$target_root"
     says "writes nothing through the Steam folder"

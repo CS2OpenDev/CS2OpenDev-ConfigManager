@@ -84,8 +84,8 @@ internal static class Archives
         _ => "identity (signed for a Steam account)"
     };
 
-    /// <summary>What every command shows first: which backup, at which level, made when and by what.</summary>
-    public static void Header(Output output, string path, VerifiedArchive archive)
+    /// <summary>What every command shows first: which backup, at which level, made when and by what, and its restorer.</summary>
+    public static void Header(Output output, string path, VerifiedArchive archive, AcbHost host)
     {
         ArchiveManifest manifest = archive.Manifest;
         CommandReport report = output.Report;
@@ -105,6 +105,63 @@ internal static class Archives
         }
 
         output.Line("Digest:   " + archive.ManifestSha256);
+        if (RestorerLine(archive, host) is { } restorer)
+        {
+            report.RestorerSha256 = archive.Restorer!.Sha256;
+            report.RestorerIsThisAcb = IsThisAcb(archive, host);
+            output.Line(restorer);
+        }
+    }
+
+    /// <summary>
+    ///     What a self-contained backup's restorer is, against this acb: the same bytes, or another build to check
+    ///     against its release's SHA256SUMS before running it. Null when the backup carries none.
+    /// </summary>
+    public static string? RestorerLine(VerifiedArchive archive, AcbHost host)
+    {
+        if (archive.Restorer is not { } restorer)
+        {
+            return null;
+        }
+
+        return IsThisAcb(archive, host)
+            ? $"Restorer: {restorer.Path}, the same program as this acb ({restorer.Sha256})"
+            : $"Restorer: {restorer.Path} ({restorer.Sha256}), not this acb's build. Before running it, check that SHA-256 against "
+              + "the SHA256SUMS of the acb release it should be.";
+    }
+
+    private static bool IsThisAcb(VerifiedArchive archive, AcbHost host) =>
+        archive.Restorer is { } restorer && OwnSha256(host.Executable) is { } own && own == restorer.Sha256;
+
+    private static readonly Dictionary<string, string?> OwnHashes = new(StringComparer.Ordinal);
+
+    /// <summary>The SHA-256 of this acb's program file, read once per path; null when it cannot be read.</summary>
+    private static string? OwnSha256(string? executable)
+    {
+        if (string.IsNullOrEmpty(executable))
+        {
+            return null;
+        }
+
+        lock (OwnHashes)
+        {
+            if (!OwnHashes.TryGetValue(executable, out string? sha))
+            {
+                try
+                {
+                    using FileStream file = new(executable, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    sha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(file));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    sha = null;
+                }
+
+                OwnHashes[executable] = sha;
+            }
+
+            return sha;
+        }
     }
 
     public static string Version() =>

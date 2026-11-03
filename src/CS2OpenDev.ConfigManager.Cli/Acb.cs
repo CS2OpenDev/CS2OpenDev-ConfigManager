@@ -14,7 +14,7 @@ internal static class Acb
                                                            apply exactly a reviewed plan, or refuse if the PC changed
           acb restore ... --dry-run                        the same checks as a restore, changing nothing
           acb undo    [--list | --id n | --set-aside n] [--only s] [--yes] [--elevate] [--dry-run]
-          acb backup  -o <backup.zip> [--only s] [--account id] [--steam-path p] [--gsi] [--seal]
+          acb backup  -o <backup.zip> [--only s] [--account id] [--steam-path p] [--gsi] [--seal] [--self-contained]
 
         Options:
           --only a,b         only these sections: cs2, cs2game, launch, input, gamebar, cs2exe, power, nvidia, vibrance
@@ -27,6 +27,8 @@ internal static class Acb
           --elevate          with --yes, let Windows ask for an administrator for the NVIDIA settings
           --seal             backup: seal it with a passphrase, asked for (Enter alone makes one) or from
                              --passphrase-file; acb then asks for it before it checks or restores the backup
+          --self-contained   backup: carry this acb in the backup as restorer/acb[.exe], so the PC it is restored on
+                             needs nothing else; the backup's README says how to run it
           --passphrase-file f
                              the passphrase is the first line of f (- for standard input), not asked for
           --json             print the report as JSON on standard output (words go to standard error)

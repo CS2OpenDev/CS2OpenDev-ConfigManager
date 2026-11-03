@@ -59,6 +59,9 @@ internal sealed class AcbHost
     /// <summary>The registry, power plans and driver the engine reads and changes; null is this PC. Tests pass a fake.</summary>
     internal IMachine? Machine { get; init; }
 
+    /// <summary>This acb's own program file: what <c>backup --self-contained</c> carries, and what a carried restorer is compared with.</summary>
+    public string? Executable { get; init; }
+
     /// <summary>Runs the wizard on the terminal and returns its exit code; null where there is no screen to draw on (tests).</summary>
     public Func<AcbHost, int>? Wizard { get; init; }
 
@@ -92,6 +95,7 @@ internal sealed class AcbHost
         Elevator = OperatingSystem.IsWindows() ? new WindowsElevator() : new NoElevator(),
         ConnectElevated = pipe => OperatingSystem.IsWindows() ? WindowsElevator.Connect(pipe) : null,
         Now = () => DateTimeOffset.Now,
+        Executable = Environment.ProcessPath,
         Wizard = CS2OpenDev.ConfigManager.Cli.Wizard.RestoreWizard.Run,
         EnsureMachineStore = (root, parent) =>
         {
@@ -122,6 +126,7 @@ internal sealed class AcbHost
         Elevator = Elevator,
         ConnectElevated = ConnectElevated,
         Now = Now,
+        Executable = Executable,
         EnsureMachineStore = EnsureMachineStore,
         BeforeRollback = BeforeRollback,
         StartNvidia = StartNvidia,

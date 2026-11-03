@@ -103,6 +103,9 @@ internal sealed class TestHost : IDisposable
     /// <summary>Everything acb wrote, for a failure message.</summary>
     public string All => _out + Environment.NewLine + _err;
 
+    /// <summary>The program file acb takes for its own (what --self-contained carries); null for none.</summary>
+    public string? Executable { get; set; }
+
     /// <summary>Stands in for the wizard when acb is run with no command at a terminal.</summary>
     public Func<AcbHost, int>? Wizard { get; set; }
 
@@ -157,6 +160,7 @@ internal sealed class TestHost : IDisposable
             StartNvidia = StartNvidia,
             DriverTimeoutMs = DriverTimeoutMs,
             Wizard = Wizard,
+            Executable = Executable,
             Machine = Machine
         };
     }

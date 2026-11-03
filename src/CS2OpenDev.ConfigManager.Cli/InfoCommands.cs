@@ -25,7 +25,7 @@ internal static class InfoCommands
             return output.Refuse(problem!);
         }
 
-        Archives.Header(output, path, archive);
+        Archives.Header(output, path, archive, host);
         if (policy?.ArchiveProblem(archive) is { } refusal)
         {
             return output.Refuse(refusal);
@@ -100,7 +100,7 @@ internal static class InfoCommands
             return output.Finish(ExitCodes.Done);
         }
 
-        Archives.Header(output, path, archive);
+        Archives.Header(output, path, archive, host);
         foreach (string section in Sections.All)
         {
             if (source.Manifest.Child(section) is not { } node)
@@ -185,7 +185,7 @@ internal static class InfoCommands
     /// <summary>Makes a v2 archive of this PC's settings, as the DemoViewer.NET plugin does. Read only, apart from the archive.</summary>
     public static int Backup(IReadOnlyList<string> args, AcbHost host)
     {
-        CommandLine line = CommandLine.Parse(args, "backup", ["gsi", "json", "seal"], ["output", "only", "account", "steam-path", "report", "passphrase-file"]);
+        CommandLine line = CommandLine.Parse(args, "backup", ["gsi", "json", "seal", "self-contained"], ["output", "only", "account", "steam-path", "report", "passphrase-file"]);
         line.NoPositionals();
         Output output = new(host, "backup", line.Flag("json"), line.Value("report"));
         string zip = line.Value("output") ?? throw new UsageException("acb backup needs -o <file> for the backup it writes.");
@@ -203,6 +203,24 @@ internal static class InfoCommands
         if (File.Exists(zip))
         {
             return output.Refuse($"{zip} already exists; a backup never replaces a file.");
+        }
+
+        byte[]? restorer = null;
+        if (line.Flag("self-contained"))
+        {
+            if (Restorers.Problem(host.Executable, host.Platform) is { } cannot)
+            {
+                return output.Refuse("--self-contained carries this acb into the backup, and " + cannot + ".");
+            }
+
+            try
+            {
+                restorer = File.ReadAllBytes(host.Executable!);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return output.Refuse($"acb cannot read its own program file to carry it: {ex.Message}");
+            }
         }
 
         SealKey? seal = null;
@@ -247,7 +265,7 @@ internal static class InfoCommands
         RunReport report;
         try
         {
-            report = BackupBuilder.Create(options, zip, new ArchiveTool("Advanced Config Backup (acb)", Archives.Version()), host.Now(), CancellationToken.None, seal);
+            report = BackupBuilder.Create(options, zip, new ArchiveTool("Advanced Config Backup (acb)", Archives.Version()), host.Now(), CancellationToken.None, seal, restorer);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -272,6 +290,11 @@ internal static class InfoCommands
         if (seal is not null)
         {
             output.Note("It is sealed: acb asks for the passphrase before it checks or restores it. Without the passphrase it cannot be opened.");
+        }
+
+        if (restorer is not null)
+        {
+            output.Note($"It carries this acb as {ArchiveFormat.RestorerEntry(host.Platform)}: unpacked beside the backup, it finds the backup and restores it. Its README says how.");
         }
 
         return output.Finish(report.Count(Outcomes.Failed) > 0 ? ExitCodes.PartsLeft : ExitCodes.Done);

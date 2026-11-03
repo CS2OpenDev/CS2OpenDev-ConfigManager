@@ -282,14 +282,14 @@ internal static class RestoreCommand
         {
             if (ex.Archive is not null)
             {
-                Archives.Header(output, request.Archive, ex.Archive);
+                Archives.Header(output, request.Archive, ex.Archive, host);
             }
 
             refusedWith = output.Refuse(ex.Message);
             return null;
         }
 
-        Archives.Header(output, request.Archive, session.Archive);
+        Archives.Header(output, request.Archive, session.Archive, host);
         foreach (string section in session.PolicyLeft)
         {
             output.Result(section, Outcomes.Skipped, RestoreSession.PolicyLeftDetail);
