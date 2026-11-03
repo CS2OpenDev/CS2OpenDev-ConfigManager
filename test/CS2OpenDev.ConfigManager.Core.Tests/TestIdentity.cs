@@ -22,7 +22,10 @@ internal static class TestIdentity
 
     public static readonly DateTimeOffset NotAfter = DateTimeOffset.UtcNow.AddDays(365);
 
-    public static IdentityTrust Trust { get; } = TrustIn(Roots);
+    /// <summary>The day the test trust's revoked keys date from.</summary>
+    public static readonly DateOnly RevokedAsOf = new(2026, 11, 1);
+
+    public static IdentityTrust Trust { get; } = TrustIn(Roots) with { RevokedAsOf = RevokedAsOf };
 
     /// <summary>The delegation two of the three roots signed, listing <see cref="SigningKey" />.</summary>
     public static DsseEnvelope Delegation { get; } = Delegate([Key(SigningKey)], Roots[0], Roots[2]);
@@ -30,9 +33,9 @@ internal static class TestIdentity
     [ModuleInitializer]
     internal static void Install() => IdentityTrust.Current = Trust;
 
-    public static IdentityTrust TrustIn(IEnumerable<ECDsa> roots, IReadOnlyDictionary<string, DateTimeOffset>? revoked = null) =>
-        new([.. roots.Select(r => IdentityIssuer.Describe(r)).Select(d => new IdentityRoot(d.Keyid, d.Spki))], 2,
-            revoked ?? new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal));
+    public static IdentityTrust TrustIn(IEnumerable<ECDsa> roots, IReadOnlySet<string>? revoked = null, int threshold = 2) =>
+        new([.. roots.Select(r => IdentityIssuer.Describe(r)).Select(d => new IdentityRoot(d.Keyid, d.Spki))], threshold,
+            revoked ?? new HashSet<string>(StringComparer.Ordinal));
 
     public static DelegatedKey Key(ECDsa key, DateTimeOffset? notBefore = null, DateTimeOffset? notAfter = null, DateTimeOffset? revokedFrom = null)
     {

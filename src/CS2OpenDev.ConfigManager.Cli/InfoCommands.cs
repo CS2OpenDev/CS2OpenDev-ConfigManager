@@ -7,10 +7,87 @@ namespace CS2OpenDev.ConfigManager.Cli;
 /// <summary><c>acb verify</c>, <c>acb show</c> and <c>acb backup</c>: the commands that change nothing on the PC but a new archive.</summary>
 internal static class InfoCommands
 {
+    /// <summary>Why a backup made with these options would be refused by <paramref name="policy" /> when restored, or null.</summary>
+    internal static string? PolicyBackupProblem(OrganiserPolicy policy, CommandLine line, IReadOnlyList<string>? only)
+    {
+        TrustLevel made = line.Flag("sign") ? TrustLevel.Identity : line.Flag("seal") ? TrustLevel.Seal : TrustLevel.Hash;
+        if (made < policy.MinimumLevel)
+        {
+            return $"the policy restores only backups at the '{ArchiveReader.Name(policy.MinimumLevel)}' level or above, and this one would be "
+                   + $"'{ArchiveReader.Name(made)}'. Add {(policy.MinimumLevel == TrustLevel.Identity ? "--sign" : "--seal or --sign")}.";
+        }
+
+        if (policy.SteamIds is not null && !line.Flag("sign"))
+        {
+            return "the policy restores only backups signed by the Steam accounts it names. Add --sign.";
+        }
+
+        if (only is not null && policy.AllowSections is { } allowed && !only.Any(s => allowed.Contains(s, StringComparer.Ordinal)))
+        {
+            return "the policy restores none of the parts --only names (it restores " + string.Join(", ", allowed) + ").";
+        }
+
+        return null;
+    }
+
+    /// <summary>What to tell the person about a backup that <paramref name="policy" /> will restore only in part, or only with another acb.</summary>
+    internal static List<string> PolicyBackupNotes(OrganiserPolicy policy, bool selfContained, RunReport report)
+    {
+        List<string> notes = [];
+        List<string> left = [.. report.Results.Where(r => r.Outcome == Outcomes.Done && !policy.Allows(r.Section)).Select(r => Sections.Label(r.Section))];
+        if (left.Count > 0)
+        {
+            notes.Add("The policy does not restore " + string.Join(", ", left) + "; they are in the backup but are left alone where it applies.");
+        }
+
+        if (selfContained && policy.RefuseCarriedRestorer)
+        {
+            notes.Add("The policy does not let the copy of acb this backup carries restore it. The organiser's own acb restores it.");
+        }
+
+        if (selfContained && policy.AcbProblem(Archives.Version(), isCarriedRestorer: false) is not null)
+        {
+            notes.Add($"The policy needs acb {policy.MinimumAcbVersion} or newer, so the copy this backup carries (acb {Archives.Version()}) will not restore it.");
+        }
+
+        return notes;
+    }
+
+    /// <summary>
+    ///     Refuses a signature for an account the policy does not name before the backup is written, so a backup the
+    ///     event would refuse is never made. The writer still checks the signature itself.
+    /// </summary>
+    private sealed class PolicySigner(IIdentitySigner inner, IReadOnlyList<string> steamIds) : IIdentitySigner
+    {
+        public DsseEnvelope Sign(string manifestSha256, string platform, ArchiveTool tool)
+        {
+            DsseEnvelope envelope = inner.Sign(manifestSha256, platform, tool);
+            string? signer = null;
+            try
+            {
+                using System.Text.Json.JsonDocument statement = System.Text.Json.JsonDocument.Parse(Convert.FromBase64String(envelope.Payload));
+                if (statement.RootElement.TryGetProperty("predicate", out System.Text.Json.JsonElement predicate)
+                    && predicate.TryGetProperty("steamId64", out System.Text.Json.JsonElement id))
+                {
+                    signer = id.GetString();
+                }
+            }
+            catch (Exception ex) when (ex is FormatException or System.Text.Json.JsonException or InvalidOperationException)
+            {
+                // The writer refuses an envelope it cannot read, with the reason.
+                return envelope;
+            }
+
+            return signer is null || steamIds.Contains(signer, StringComparer.Ordinal)
+                ? envelope
+                : throw new IdentityServiceException($"The service signed for Steam account (SteamID64 {signer}), which the policy does not name ({string.Join(", ", steamIds)}).");
+        }
+    }
+
     /// <summary>Checks an archive and says what it is. Any platform: checking a backup is not restoring it.</summary>
     public static int Verify(IReadOnlyList<string> args, AcbHost host)
     {
-        CommandLine line = CommandLine.Parse(args, "verify", ["json"], ["policy", "report", "passphrase-file"]);
+        CommandLine line = CommandLine.Parse(args, "verify", ["json", "accept-revoked"], ["policy", "report", "passphrase-file"]);
         Output output = new(host, "verify", line.Flag("json"), line.Value("report"));
         string path = line.Single("a backup file");
         OrganiserPolicy? policy = Archives.Policy(line.Value("policy"), out string? policyProblem);
@@ -19,13 +96,31 @@ internal static class InfoCommands
             return output.Refuse(policyProblem);
         }
 
-        VerifiedArchive? archive = Archives.Open(path, null, policy?.MinimumLevel ?? TrustLevel.Hash, out string? problem, Archives.Passphrase(line, host));
+        if (policy?.AcbProblem(Archives.Version(), isCarriedRestorer: false) is { } tooOld)
+        {
+            return output.Refuse(tooOld + ".");
+        }
+
+        RevokedDecision decide = RestoreSession.RevokedRule(policy, line.Flag("accept-revoked"), host.IsAdministrator(), ask: null);
+        VerifiedArchive? archive = Archives.Open(path, null, policy?.MinimumLevel ?? TrustLevel.Hash, out string? problem, out bool revoked,
+            Archives.Passphrase(line, host), decide);
         if (archive is null)
         {
+            // A revoked signature is still shown: who it names, and that the files match.
+            if (revoked && Archives.Open(path, null, TrustLevel.Hash, out _, out _, null, Archives.ShowRevoked) is { } shown)
+            {
+                Archives.Header(output, path, shown, host);
+            }
+
             return output.Refuse(problem!);
         }
 
         Archives.Header(output, path, archive, host);
+        if (policy?.AcbProblem(Archives.Version(), Archives.IsThisAcb(archive, host)) is { } carried)
+        {
+            return output.Refuse(carried + ".");
+        }
+
         if (policy?.ArchiveProblem(archive) is { } refusal)
         {
             return output.Refuse(refusal);
@@ -41,7 +136,10 @@ internal static class InfoCommands
 
         output.Line();
         // A hash-level backup proves only that its files match its manifest: anyone can rewrite both.
-        string state = archive.Level switch
+        string state = archive.RevokedSigner is not null
+            ? "Its files match its manifest, so it is unchanged since it was made. Its identity signature does not count, as its signing key was revoked, "
+              + "so who made it is not proven; it was accepted at the hash level (--accept-revoked)."
+            : archive.Level switch
         {
             TrustLevel.Hash => "Its files match its manifest, so nothing was damaged or changed by accident. It is unsigned: anyone could have edited it, the account named above included.",
             TrustLevel.Seal => "The passphrase opens its seal, so it was made by someone who knows the passphrase and is unchanged since. "
@@ -60,7 +158,8 @@ internal static class InfoCommands
         CommandLine line = CommandLine.Parse(args, "show", ["json"], ["section", "file", "report", "passphrase-file"]);
         Output output = new(host, "show", line.Flag("json"), line.Value("report"));
         string path = line.Single("a backup file");
-        VerifiedArchive? archive = Archives.Open(path, null, TrustLevel.Hash, out string? problem, Archives.Passphrase(line, host));
+        // Showing is not using: a backup signed with a revoked key is shown at the hash level, with the warning in its header.
+        VerifiedArchive? archive = Archives.Open(path, null, TrustLevel.Hash, out string? problem, out _, Archives.Passphrase(line, host), Archives.ShowRevoked);
         if (archive is null)
         {
             return output.Refuse(problem!);
@@ -160,12 +259,18 @@ internal static class InfoCommands
         return passphrase;
     }
 
-    /// <summary>Why a backup cannot be signed for a Steam account here; null when it can.</summary>
-    internal static string? SignProblem(string? service)
+    /// <summary>What to say when signing failed: nothing was written, and how to save a backup now.</summary>
+    internal const string NotSigned = "No backup was written; back up without --sign, or with --seal instead, to save one now.";
+
+    /// <summary>
+    ///     Why a backup cannot be signed for a Steam account here, <paramref name="browserProblem" /> being why a
+    ///     browser sign-in cannot come back to this PC; null when it can.
+    /// </summary>
+    internal static string? SignProblem(string? service, string? browserProblem = null)
     {
         if (service is null)
         {
-            return "signing for a Steam account needs the CS2OpenDev service: give --identity-service <url>, or set ACB_IDENTITY_SERVICE.";
+            return "this acb does not know the CS2OpenDev service's address yet, so it cannot sign for a Steam account.";
         }
 
         if (ServiceSigner.Problem(service) is { } bad)
@@ -173,9 +278,12 @@ internal static class InfoCommands
             return bad + ".";
         }
 
-        return IdentityTrust.Current.Roots.Count == 0
-            ? "this acb carries no root keys for the identity level yet, so it could not check the signature the service returns."
-            : null;
+        if (IdentityTrust.Current.Roots.Count == 0)
+        {
+            return "this acb carries no root keys for the identity level yet, so it could not check the signature the service returns.";
+        }
+
+        return browserProblem is null ? null : browserProblem + ".";
     }
 
     private static string Describe(KvNode node)
@@ -203,7 +311,7 @@ internal static class InfoCommands
     /// <summary>Makes a v2 archive of this PC's settings, as the DemoViewer.NET plugin does. Read only, apart from the archive.</summary>
     public static int Backup(IReadOnlyList<string> args, AcbHost host)
     {
-        CommandLine line = CommandLine.Parse(args, "backup", ["gsi", "json", "seal", "sign", "self-contained"], ["output", "only", "account", "steam-path", "report", "passphrase-file", "identity-service"]);
+        CommandLine line = CommandLine.Parse(args, "backup", ["gsi", "json", "seal", "sign", "self-contained"], ["output", "only", "account", "steam-path", "report", "passphrase-file", "identity-service", "policy"]);
         line.NoPositionals();
         Output output = new(host, "backup", line.Flag("json"), line.Value("report"));
         string zip = line.Value("output") ?? throw new UsageException("acb backup needs -o <file> for the backup it writes.");
@@ -228,6 +336,19 @@ internal static class InfoCommands
             return output.Refuse($"{zip} already exists; a backup never replaces a file.");
         }
 
+        // An event's policy, given here, refuses up front a backup it would refuse when restoring. It cannot make
+        // anyone use it: that is enforced where the organiser restores.
+        OrganiserPolicy? policy = Archives.Policy(line.Value("policy"), out string? policyProblem);
+        if (policyProblem is not null)
+        {
+            return output.Refuse(policyProblem);
+        }
+
+        if (policy is not null && PolicyBackupProblem(policy, line, only) is { } unfit)
+        {
+            return output.Refuse(unfit + " No backup was written.");
+        }
+
         byte[]? restorer = null;
         if (line.Flag("self-contained"))
         {
@@ -246,15 +367,35 @@ internal static class InfoCommands
             }
         }
 
+        // Ctrl+C while signing stops the wait and the backup, so the temp copies of the settings are still deleted.
+        using CancellationTokenSource interrupt = new();
+        using IDisposable? caught = line.Flag("sign")
+            ? host.OnInterrupt(() =>
+            {
+                host.Err.WriteLine("Stopping; no backup will be written. At a question, press Enter. Ctrl+C again ends acb now and leaves its temp copies behind.");
+                interrupt.Cancel();
+            })
+            : null;
         IIdentitySigner? identity = null;
         if (line.Flag("sign"))
         {
-            if (SignProblem(line.Value("identity-service") ?? host.IdentityService) is { } cannot)
+            if (SignProblem(line.Value("identity-service") ?? host.IdentityService, host.BrowserSignInProblem) is { } cannot)
             {
-                return output.Refuse(cannot);
+                return output.Refuse(cannot + " No backup was written.");
             }
 
-            identity = host.IdentitySigner((line.Value("identity-service") ?? host.IdentityService)!, host.Err);
+            // Signing in needs a person at a browser; with nobody there it would only wait out the sign-in limit.
+            if (!host.Interactive)
+            {
+                return output.Refuse("--sign signs you in with Steam in a browser, so it runs only at a terminal; no backup was written.");
+            }
+
+            identity = host.IdentitySigner((line.Value("identity-service") ?? host.IdentityService)!, host.Err, interrupt.Token);
+            if (policy?.SteamIds is { } steamIds)
+            {
+                identity = new PolicySigner(identity, steamIds);
+            }
+            output.Note("Signing waits for you to sign in with Steam in your browser. Ctrl+C stops it, and then no backup is written.");
         }
 
         SealKey? seal = null;
@@ -299,11 +440,29 @@ internal static class InfoCommands
         RunReport report;
         try
         {
-            report = BackupBuilder.Create(options, zip, new ArchiveTool("Advanced Config Backup (acb)", Archives.Version()), host.Now(), CancellationToken.None, seal, restorer, identity);
+            report = BackupBuilder.Create(options, zip, new ArchiveTool("Advanced Config Backup (acb)", Archives.Version()), host.Now(), interrupt.Token, seal, restorer, identity,
+                said => host.Confirm(said + " Save it signed by that account anyway?"));
+        }
+        catch (IdentityServiceException ex)
+        {
+            return output.Refuse(ex.Message + " " + NotSigned);
+        }
+        catch (OperationCanceledException) when (interrupt.IsCancellationRequested)
+        {
+            return output.Refuse("the backup was stopped. " + NotSigned);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return output.Refuse($"the backup could not be written: {ex.Message}");
+        }
+
+        if (policy is not null)
+        {
+            output.Line("Policy:   " + line.Value("policy") + " (" + policy.Sha256 + ")");
+            foreach (string note in PolicyBackupNotes(policy, line.Flag("self-contained"), report))
+            {
+                output.Note(note);
+            }
         }
 
         output.Line("Saving:");
@@ -330,7 +489,7 @@ internal static class InfoCommands
         {
             output.Report.SignedBy = signer.SteamId64;
             output.Report.SignedAt = signer.SignedAt;
-            output.Note($"It is signed for Steam account {signer.SteamId64}: anyone can check offline that this account made it and that it is unchanged since.");
+            output.Note($"It is signed for Steam account (SteamID64 {signer.SteamId64}): anyone can check offline that this account made it and that it is unchanged since.");
         }
 
         if (restorer is not null)

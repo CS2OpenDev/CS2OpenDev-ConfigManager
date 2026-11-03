@@ -16,6 +16,18 @@ internal static class Archives
     public static VerifiedArchive? Open(string path, string? requirePlatform, TrustLevel minimumLevel, out string? problem, PassphrasePrompt? ask = null) =>
         RestoreSession.OpenArchive(path, requirePlatform, minimumLevel, out problem, ask);
 
+    /// <summary>As above, with <paramref name="decide" /> saying what to do with a backup signed with a revoked key.</summary>
+    public static VerifiedArchive? Open(string path, string? requirePlatform, TrustLevel minimumLevel, out string? problem, out bool revoked,
+        PassphrasePrompt? ask, RevokedDecision decide) =>
+        RestoreSession.OpenArchive(path, requirePlatform, minimumLevel, out problem, out revoked, ask, null, decide);
+
+    /// <summary>Reads a backup signed with a revoked key at the hash level, for showing it; the decision to use it is made elsewhere.</summary>
+    public static readonly RevokedDecision ShowRevoked = _ => (true, null);
+
+    /// <summary>The level line for a backup read although its signing key was revoked.</summary>
+    public const string RevokedLevel =
+        "hash (its identity signature does not count, as its signing key was revoked; its files match the manifest, so it is unchanged since it was made)";
+
     /// <summary>
     ///     Where a sealed backup's passphrase comes from for one command: the file --passphrase-file names (once; a
     ///     passphrase in a file that does not open the seal is not asked for again), or else the person at the
@@ -81,7 +93,7 @@ internal static class Archives
     {
         TrustLevel.Hash => "hash (unsigned: anyone could have edited this; it shows only that the files match the manifest)",
         TrustLevel.Seal => "seal (opened with its passphrase: made by someone who knows it, and unchanged since)",
-        _ => "identity (signed through the CS2OpenDev service for the Steam account below: made by that account, unchanged since)"
+        _ => "identity (signed through the CS2OpenDev service by the Steam account on the Signed line: made by that account, unchanged since)"
     };
 
     /// <summary>What every command shows first: which backup, at which level, made when and by what, and its restorer.</summary>
@@ -96,24 +108,32 @@ internal static class Archives
         report.Created = manifest.Created;
         report.SteamAccount = manifest.SteamAccount;
         output.Line("Backup:   " + report.Archive);
-        output.Line("Level:    " + LevelText(archive.Level));
+        output.Line("Level:    " + (archive.RevokedSigner is null ? LevelText(archive.Level) : RevokedLevel));
+        foreach (string line in SignerLines(archive, host))
+        {
+            output.Line(line);
+        }
+
         output.Line(string.Create(CultureInfo.InvariantCulture,
             $"Made:     {manifest.Created:yyyy-MM-dd HH:mm}Z by {manifest.Tool.Name} {manifest.Tool.Version}, on {manifest.Platform}"));
         if (manifest.SteamAccount is not null)
         {
-            output.Line("Account:  Steam account " + manifest.SteamAccount);
+            output.Line($"Settings: Steam account {manifest.SteamAccount}'s (as the backup says)");
         }
 
         output.Line("Digest:   " + archive.ManifestSha256);
-        foreach (string line in SignerLines(archive))
+
+        if (archive.RevokedSigner is { } claimed)
         {
-            output.Line(line);
+            report.RevokedSignature = claimed.SteamId64;
+            report.RevokedKey = claimed.Keyid;
         }
 
         if (archive.IdentitySigner is { } signer)
         {
             report.SignedBy = signer.SteamId64;
             report.SignedAt = signer.SignedAt;
+            report.RevokedAsOf = signer.RevokedAsOf;
         }
 
         if (RestorerLine(archive, host) is { } restorer)
@@ -125,24 +145,32 @@ internal static class Archives
     }
 
     /// <summary>
-    ///     Who an identity-level backup is signed for, when, with which key; and when the settings are another
-    ///     account's, that too. Empty below the identity level.
+    ///     Who an identity-level backup is signed for, when, with which key; when the settings are another account's,
+    ///     that too; how current this acb's revoked keys are; and, when this acb is the restorer the backup carries,
+    ///     that the backup's maker chose the acb checking it. Empty below the identity level.
     /// </summary>
-    public static IReadOnlyList<string> SignerLines(VerifiedArchive archive)
+    public static IReadOnlyList<string> SignerLines(VerifiedArchive archive, AcbHost host)
     {
+        if (archive.RevokedSigner is { } claimed)
+        {
+            return ["Revoked:  " + Output.Printable(claimed.RevokedWarning())];
+        }
+
         if (archive.IdentitySigner is not { } signer)
         {
             return [];
         }
 
-        List<string> lines =
-        [
-            string.Create(CultureInfo.InvariantCulture, $"Signed:   Steam account {signer.SteamId64}, {signer.SignedAt:yyyy-MM-dd HH:mm}Z (key {signer.Keyid[..16]})")
-        ];
-        string account = (long.Parse(signer.SteamId64, CultureInfo.InvariantCulture) - 76561197960265728L).ToString(CultureInfo.InvariantCulture);
-        if (archive.Manifest.SteamAccount is { } settings && settings != account)
+        List<string> lines = ["Signed:   " + signer.Describe()];
+        if (signer.OtherAccount(archive.Manifest.SteamAccount) is { } other)
         {
-            lines.Add($"          the settings are account {Output.Printable(settings)}'s; account {account} signed them");
+            lines.Add("          " + Output.Printable(other));
+        }
+
+        lines.Add("          " + signer.Revocations());
+        if (IsThisAcb(archive, host))
+        {
+            lines.Add("          " + CarriedRestorer);
         }
 
         return lines;
@@ -165,7 +193,15 @@ internal static class Archives
               + "the SHA256SUMS of the acb release it should be.";
     }
 
-    private static bool IsThisAcb(VerifiedArchive archive, AcbHost host) =>
+    /// <summary>
+    ///     What an identity check by the restorer a backup carries says: the backup's maker picked that acb, and with
+    ///     it which stolen keys it knows of.
+    /// </summary>
+    public const string CarriedRestorer =
+        "This acb is the restorer the backup carries, so whoever made the backup chose the acb checking it, and the stolen keys it knows of. "
+        + "Check the signature again with an acb installed on its own, at its newest release.";
+
+    internal static bool IsThisAcb(VerifiedArchive archive, AcbHost host) =>
         archive.Restorer is { } restorer && OwnSha256(host.Executable) is { } own && own == restorer.Sha256;
 
     private static readonly Dictionary<string, string?> OwnHashes = new(StringComparer.Ordinal);

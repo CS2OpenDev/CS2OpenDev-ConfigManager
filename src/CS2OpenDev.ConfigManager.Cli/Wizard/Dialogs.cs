@@ -56,6 +56,32 @@ internal static class Dialogs
         return result;
     }
 
+    /// <summary>A question with a yes and a no; no when the person cancels or there is no screen.</summary>
+    public static bool YesNo(IApplication? app, string title, string question, string yes)
+    {
+        if (app is null)
+        {
+            return false;
+        }
+
+        const int width = 72;
+        List<string> lines = [.. Ui.Wrap([question], width - 4)];
+        bool result = false;
+        using Dialog dialog = Box(title, width, lines.Count + 6);
+        for (int i = 0; i < lines.Count; i++)
+        {
+            dialog.Add(Ui.Text(" " + lines[i], y: i));
+        }
+
+        Buttons(dialog, (yes, () =>
+        {
+            result = true;
+            return true;
+        }), ("No", () => true));
+        app.Run(dialog);
+        return result;
+    }
+
     /// <summary>
     ///     A new passphrase for sealing: typed twice, or six random words shown once to write down. Null when the
     ///     person cancels.
@@ -94,6 +120,84 @@ internal static class Dialogs
         first.SetFocus();
         app.Run(dialog);
         return result;
+    }
+
+    /// <summary>
+    ///     Runs <paramref name="work" /> off the screen's thread in a box that shows each line it says until it ends,
+    ///     with the last address it named in a field it can be copied from, to open by hand. Cancel, or Esc, cancels it,
+    ///     and the box stays up until it has stopped. With no screen it runs here, saying nothing.
+    /// </summary>
+    public static void Working(IApplication? app, string title, Action<TextWriter, CancellationToken> work)
+    {
+        using CancellationTokenSource cancel = new();
+        if (app is null)
+        {
+            work(TextWriter.Null, cancel.Token);
+            return;
+        }
+
+        List<string> lines = [];
+        TextPane said = new() { X = 1, Y = 0, Width = Dim.Fill(1), Height = Dim.Fill(4) };
+        TextField address = new() { X = 1, Y = Pos.AnchorEnd(3), Width = Dim.Fill(1), ReadOnly = true };
+        using Dialog dialog = Box(title, 90, 16);
+        dialog.Add(said, address);
+        void Say(string line)
+        {
+            lines.Add(Output.Printable(line));
+            said.SetLines(lines);
+            if (line.TrimStart().StartsWith("http", StringComparison.Ordinal))
+            {
+                address.Text = line.Trim();
+            }
+        }
+
+        // The box only closes once the work has ended, so nothing queued below ever reaches a box that is gone.
+        bool ended = false;
+        dialog.IsRunningChanging += (_, e) =>
+        {
+            if (!e.NewValue && !ended)
+            {
+                e.Cancel = true;
+                Stop();
+            }
+        };
+        void Stop()
+        {
+            if (!cancel.IsCancellationRequested)
+            {
+                cancel.Cancel();
+                Say("Cancelling...");
+            }
+        }
+
+        Buttons(dialog, ("Cancel", () =>
+        {
+            Stop();
+            return false;
+        }));
+        using LineWriter words = new(line => app.Invoke(() =>
+        {
+            if (!ended)
+            {
+                Say(line);
+            }
+        }));
+        Task running = Task.Run(() => work(words, cancel.Token), CancellationToken.None);
+        running.ContinueWith(_ => app.Invoke(() =>
+        {
+            ended = true;
+            dialog.RequestStop();
+        }), CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+        app.Run(dialog);
+        ended = true;
+        cancel.Cancel();
+        running.GetAwaiter().GetResult();
+    }
+
+    /// <summary>A writer that hands on each line written to it.</summary>
+    private sealed class LineWriter(Action<string> line) : StringWriter(System.Globalization.CultureInfo.InvariantCulture)
+    {
+        public override void WriteLine(string? value) => line(value ?? "");
     }
 
     private static Dialog Box(string title, int width, int height) => new() { Title = title, Width = width, Height = height };

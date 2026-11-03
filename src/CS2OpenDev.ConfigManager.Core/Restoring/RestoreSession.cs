@@ -12,6 +12,19 @@ internal sealed record RestoreRequest(string Archive, IReadOnlyList<string>? Onl
 
     /// <summary>A sealed backup's key, handed on by the run that opened it (the administrator's run).</summary>
     public byte[]? SealKey { get; init; }
+
+    /// <summary>
+    ///     Asked, when the backup's signing key was revoked and its files still match, whether to restore it checked
+    ///     only as unchanged; null when nobody can be asked. Not asked under a policy that refuses such backups.
+    /// </summary>
+    public Func<RevokedSignatureException, bool>? AskRevoked { get; init; }
+
+    /// <summary>
+    ///     Restore a backup signed with a revoked key at the hash level without asking (<c>--accept-revoked</c>, or the
+    ///     first run's answer handed to the administrator's). Under a policy that refuses such backups it counts only
+    ///     when acb runs as an administrator.
+    /// </summary>
+    public bool AcceptRevoked { get; init; }
 }
 
 /// <summary>
@@ -19,6 +32,9 @@ internal sealed record RestoreRequest(string Archive, IReadOnlyList<string>? Onl
 ///     Returns null when there is none to give.
 /// </summary>
 internal delegate string? PassphrasePrompt(bool again);
+
+/// <summary>Whether to read a backup signed with a revoked key at the hash level, and what to add to the refusal when not.</summary>
+internal delegate (bool Accept, string? Hint) RevokedDecision(RevokedSignatureException revoked);
 
 /// <summary>What a restore reaches on the PC, apart from the files and settings the engine writes.</summary>
 internal sealed class RestoreEnvironment
@@ -45,12 +61,24 @@ internal sealed class RestoreEnvironment
 
     /// <summary>The registry, power plans and driver; null is this PC. Tests pass a fake.</summary>
     public IMachine? Machine { get; init; }
+
+    /// <summary>acb runs as an administrator (elevated on Windows, root on Linux), so it may override a policy's refusal of a revoked signature.</summary>
+    public bool IsAdministrator { get; init; }
+
+    /// <summary>This acb's version, for a policy's <c>minimumAcbVersion</c>.</summary>
+    public string AcbVersion { get; init; } = RestoreSession.ThisVersion;
+
+    /// <summary>Whether this acb is the very copy a backup carries, for a policy's <c>refuseCarriedRestorer</c>; null for never.</summary>
+    public Func<VerifiedArchive, bool>? IsCarriedRestorer { get; init; }
 }
 
 /// <summary>A restore refused before anything changed, with the archive when it was verified, so its header can still be shown.</summary>
 internal sealed class RestoreRefusedException(string message, VerifiedArchive? archive = null) : Exception(message)
 {
     public VerifiedArchive? Archive { get; } = archive;
+
+    /// <summary>Refused because its signing key was revoked, though its files match; accepting it (as allowed) reads it at the hash level.</summary>
+    public bool Revoked { get; init; }
 }
 
 /// <summary>
@@ -156,12 +184,24 @@ internal sealed class RestoreSession
             throw new RestoreRefusedException(policyProblem);
         }
 
+        if (policy?.AcbProblem(environment.AcbVersion, isCarriedRestorer: false) is { } tooOld)
+        {
+            throw new RestoreRefusedException(tooOld + ".");
+        }
+
         TrustLevel minimum = policy?.MinimumLevel ?? TrustLevel.Hash;
+        RevokedDecision decide = RevokedRule(policy, request.AcceptRevoked, environment.IsAdministrator, request.AskRevoked);
         string? problem;
+        bool revoked;
         VerifiedArchive archive = (archiveBytes is null
-                                      ? OpenArchive(request.Archive, environment.Platform, minimum, out problem, request.Passphrase, request.SealKey)
-                                      : OpenArchive(archiveBytes, environment.Platform, minimum, out problem, request.Passphrase, request.SealKey))
-                                  ?? throw new RestoreRefusedException(problem!);
+                                      ? OpenArchive(request.Archive, environment.Platform, minimum, out problem, out revoked, request.Passphrase, request.SealKey, decide)
+                                      : OpenArchive(archiveBytes, environment.Platform, minimum, out problem, out revoked, request.Passphrase, request.SealKey, decide))
+                                  ?? throw new RestoreRefusedException(problem!) { Revoked = revoked };
+        if (policy?.AcbProblem(environment.AcbVersion, environment.IsCarriedRestorer?.Invoke(archive) ?? false) is { } carried)
+        {
+            throw new RestoreRefusedException(carried + ".", archive);
+        }
+
         if (policy?.ArchiveProblem(archive) is { } policyRefusal)
         {
             throw new RestoreRefusedException(policyRefusal, archive);
@@ -491,6 +531,38 @@ internal sealed class RestoreSession
         return Dsse.Sha256Hex(Encoding.UTF8.GetBytes(text.ToString()));
     }
 
+    /// <summary>This build's version, without build metadata.</summary>
+    public static string ThisVersion { get; } =
+        typeof(RestoreSession).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion.Split('+')[0] ?? "0.0.0";
+
+    /// <summary>
+    ///     What to do with a backup whose signing key was revoked, under <paramref name="policy" />: a policy that
+    ///     refuses lets only an administrator's <paramref name="accept" /> through; otherwise <paramref name="accept" />
+    ///     or a yes from <paramref name="ask" /> reads it at the hash level. The hint ends the refusal.
+    /// </summary>
+    public static RevokedDecision RevokedRule(OrganiserPolicy? policy, bool accept, bool asAdministrator, Func<RevokedSignatureException, bool>? ask) =>
+        revoked =>
+        {
+            if (policy is { Revoked: RevokedSignatures.Refuse })
+            {
+                return accept && asAdministrator
+                    ? (true, null)
+                    : (false, accept
+                        ? " The organiser's policy refuses such a backup, and --accept-revoked overrides it only when acb runs as an administrator."
+                        : " The organiser's policy refuses such a backup; an administrator can restore it anyway with --accept-revoked.");
+            }
+
+            if (accept || ask?.Invoke(revoked) == true)
+            {
+                return (true, null);
+            }
+
+            return (false, ask is null
+                ? " --accept-revoked accepts it anyway, checked only as unchanged."
+                : " It was not restored.");
+        };
+
     /// <summary>How many passphrases a sealed backup is tried with before it is refused.</summary>
     public const int PassphraseTries = 3;
 
@@ -501,10 +573,19 @@ internal sealed class RestoreSession
     ///     <paramref name="ask" /> gives, asking again (up to <see cref="PassphraseTries" /> times) after one that does not open it.
     /// </summary>
     public static VerifiedArchive? OpenArchive(string path, string? requirePlatform, TrustLevel minimumLevel, out string? problem,
-        PassphrasePrompt? ask = null, byte[]? sealKey = null)
+        PassphrasePrompt? ask = null, byte[]? sealKey = null) =>
+        OpenArchive(path, requirePlatform, minimumLevel, out problem, out _, ask, sealKey, null);
+
+    /// <summary>
+    ///     As above, deciding with <paramref name="revoked" /> what to do with a backup signed with a revoked key (null
+    ///     refuses it); <paramref name="wasRevoked" /> says it was refused for that.
+    /// </summary>
+    public static VerifiedArchive? OpenArchive(string path, string? requirePlatform, TrustLevel minimumLevel, out string? problem, out bool wasRevoked,
+        PassphrasePrompt? ask, byte[]? sealKey, RevokedDecision? revoked)
     {
         ArgumentNullException.ThrowIfNull(path);
         problem = null;
+        wasRevoked = false;
         if (Directory.Exists(path))
         {
             problem = $"{path} is a folder. acb reads a backup file (.zip) as it was made; an unzipped backup is not checked or restored.";
@@ -513,7 +594,7 @@ internal sealed class RestoreSession
 
         try
         {
-            return Unlock(options => ArchiveReader.Open(path, options), requirePlatform, minimumLevel, ask, sealKey, out problem);
+            return Unlock(options => ArchiveReader.Open(path, options), requirePlatform, minimumLevel, ask, sealKey, revoked, out problem, out wasRevoked);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -526,16 +607,21 @@ internal sealed class RestoreSession
     /// <summary>As <see cref="OpenArchive(string, string?, TrustLevel, out string?, PassphrasePrompt, byte[])" />, from a zip's bytes rather than a path.</summary>
     public static VerifiedArchive? OpenArchive(byte[] zip, string? requirePlatform, TrustLevel minimumLevel, out string? problem,
         PassphrasePrompt? ask = null, byte[]? sealKey = null) =>
+        OpenArchive(zip, requirePlatform, minimumLevel, out problem, out _, ask, sealKey, null);
+
+    public static VerifiedArchive? OpenArchive(byte[] zip, string? requirePlatform, TrustLevel minimumLevel, out string? problem, out bool wasRevoked,
+        PassphrasePrompt? ask, byte[]? sealKey, RevokedDecision? revoked) =>
         Unlock(options =>
         {
             using MemoryStream stream = new(zip, writable: false);
             return ArchiveReader.Open(stream, options);
-        }, requirePlatform, minimumLevel, ask, sealKey, out problem);
+        }, requirePlatform, minimumLevel, ask, sealKey, revoked, out problem, out wasRevoked);
 
     private static VerifiedArchive? Unlock(Func<ArchiveReadOptions, VerifiedArchive> open, string? requirePlatform, TrustLevel minimumLevel,
-        PassphrasePrompt? ask, byte[]? sealKey, out string? problem)
+        PassphrasePrompt? ask, byte[]? sealKey, RevokedDecision? revoked, out string? problem, out bool wasRevoked)
     {
         problem = null;
+        wasRevoked = false;
         ArchiveReadOptions options = new() { RequirePlatform = requirePlatform, MinimumLevel = minimumLevel, SealKey = sealKey };
         for (int tries = 0; ; tries++)
         {
@@ -547,6 +633,20 @@ internal sealed class RestoreSession
             catch (SealNotOpenedException ex)
             {
                 notOpened = ex;
+            }
+            catch (RevokedSignatureException ex) when (!options.AcceptRevoked)
+            {
+                (bool accept, string? hint) = revoked?.Invoke(ex) ?? (false, null);
+                if (accept)
+                {
+                    options = options with { AcceptRevoked = true };
+                    tries--;
+                    continue;
+                }
+
+                problem = ex.Message + hint;
+                wasRevoked = true;
+                return null;
             }
             catch (ArchiveRejectedException ex)
             {

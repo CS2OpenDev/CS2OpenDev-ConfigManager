@@ -6,7 +6,8 @@ internal static class Acb
     public const string Usage = """
         Usage:
           acb                                              back up, restore or put this PC back on screen (needs a terminal)
-          acb verify  <backup.zip> [--policy f] [--json]       check it; say its trust level, when it was made, what it holds
+          acb verify  <backup.zip> [--policy f] [--accept-revoked] [--json]
+                                                           check it; say its trust level, when it was made, what it holds
           acb show    <backup.zip> [--section s | --file p]    list it, or print one part or one file
           acb plan    <backup.zip> [options] [--json]          what a restore would change; changes nothing
           acb restore <backup.zip> [options] [--yes] [--elevate]
@@ -15,12 +16,17 @@ internal static class Acb
           acb restore ... --dry-run                        the same checks as a restore, changing nothing
           acb undo    [--list | --id n | --set-aside n] [--only s] [--yes] [--elevate] [--dry-run]
           acb backup  -o <backup.zip> [--only s] [--account id] [--steam-path p] [--gsi] [--seal | --sign] [--self-contained]
+                      [--policy f]
 
         Options:
           --only a,b         only these sections: cs2, cs2game, launch, input, gamebar, cs2exe, power, nvidia, vibrance
           --account id       the Steam account to restore to (default: the backup's own, once it has signed in here)
           --steam-path p     the Steam folder (default: found; for undo, the one each restore wrote to)
-          --policy f         an organiser's policy file, which can only narrow what is restored
+          --policy f         an organiser's policy file, which can only narrow what is restored; with backup, refuse
+                             a backup that policy would refuse, before anything is saved
+          --accept-revoked   use a backup whose signing key was revoked, checked only as unchanged (the hash level);
+                             at a terminal acb asks instead. Under a policy that refuses such backups, only an
+                             administrator's --accept-revoked counts
           --gsi              backup: carry gamestate_integration_*.cfg; plan and restore: write them too (they send
                              live game data to the address they name, for every account on the PC)
           --yes              do not ask; without a terminal, nothing changes unless this is given
@@ -28,9 +34,11 @@ internal static class Acb
           --seal             backup: seal it with a passphrase, asked for (Enter alone makes one) or from
                              --passphrase-file; acb then asks for it before it checks or restores the backup
           --sign             backup: sign it for your Steam account through the CS2OpenDev service (signs you in
-                             with Steam in your browser); anyone can then check offline who made it
+                             with Steam in your browser, so only at a terminal); anyone can then check offline
+                             who made it
           --identity-service u
-                             the CS2OpenDev service that signs (default: ACB_IDENTITY_SERVICE)
+                             the CS2OpenDev service's address; only the one this acb knows is taken
+                             (default: ACB_IDENTITY_SERVICE, else that one)
           --self-contained   backup: carry this acb in the backup as restorer/acb[.exe], so the PC it is restored on
                              needs nothing else; the backup's README says how to run it
           --passphrase-file f

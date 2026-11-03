@@ -21,10 +21,13 @@ public static class ArchiveWriter
     ///     given one, and at the <see cref="TrustLevel.Hash" /> level otherwise. With <paramref name="restorer" />, the
     ///     archive is self-contained: those bytes go in as the platform's <see cref="ArchiveFormat.RestorerEntry" />,
     ///     listed in the manifest like any entry. The zip is written beside <paramref name="zipPath" /> and moved into
-    ///     place only when complete; an existing file there is never replaced.
+    ///     place only when complete; an existing file there is never replaced. When <paramref name="identity" />
+    ///     signs for another account than the one whose settings these are, or the settings name no account,
+    ///     <paramref name="otherSigner" /> is asked with what to say, and without it, or with no for an answer,
+    ///     nothing is written.
     /// </summary>
     public static ArchiveManifest Write(string stagingDir, string zipPath, ArchiveContent content, DateTimeOffset created, CancellationToken ct,
-        SealKey? seal = null, byte[]? restorer = null, IIdentitySigner? identity = null)
+        SealKey? seal = null, byte[]? restorer = null, IIdentitySigner? identity = null, Func<string, bool>? otherSigner = null)
     {
         if (seal is not null && identity is not null)
         {
@@ -79,9 +82,9 @@ public static class ArchiveWriter
         CheckLimits(entries);
 
         ArchiveManifest manifest = new(ArchiveFormat.Format, content.Platform, created.ToUniversalTime(), content.Tool,
-            content.SteamAccount, content.Sections, entries);
+            content.Sections, entries, content.SteamAccount);
         byte[] manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifest, ArchiveJson.Strict.ArchiveManifest);
-        byte[] envelopeBytes = identity is null ? Envelope(manifestBytes, seal) : Signed(manifestBytes, content, identity);
+        byte[] envelopeBytes = identity is null ? Envelope(manifestBytes, seal) : Signed(manifestBytes, content, identity, otherSigner);
 
         string partial = zipPath + ".partial";
         File.Delete(partial);
@@ -137,20 +140,39 @@ public static class ArchiveWriter
 
     /// <summary>
     ///     The signer's envelope, checked here as any reader checks it (against this build's roots, for this manifest)
-    ///     before it is written, so no backup goes out that its own acb would refuse.
+    ///     before it is written, so no backup goes out that its own acb would refuse. A signer other than the
+    ///     settings' account (someone else signed in, or another account's sign-in raced this one) is never written
+    ///     without a yes, nor is any signer when the settings name no account to compare it with.
     /// </summary>
-    private static byte[] Signed(byte[] manifestBytes, ArchiveContent content, IIdentitySigner identity)
+    private static byte[] Signed(byte[] manifestBytes, ArchiveContent content, IIdentitySigner identity, Func<string, bool>? otherSigner)
     {
         string manifestSha = Dsse.Sha256Hex(manifestBytes);
         DsseEnvelope envelope = identity.Sign(manifestSha, content.Platform, content.Tool);
         byte[] envelopeBytes = JsonSerializer.SerializeToUtf8Bytes(envelope, ArchiveJson.Strict.DsseEnvelope);
+        IdentitySigner signer;
         try
         {
-            ArchiveReader.CheckEnvelope(envelopeBytes, manifestSha, TrustLevel.Identity);
+            signer = ArchiveReader.CheckEnvelope(envelopeBytes, manifestSha, TrustLevel.Identity, IdentityTrust.Current, DateTimeOffset.UtcNow)!;
         }
         catch (ArchiveRejectedException ex)
         {
-            throw new IOException("The signature the service returned does not check: " + ex.Message, ex);
+            throw new IOException("The signature the service returned does not check: " + ex.Message
+                                  + (ex.MayBeNewer ? " If a newer acb is out, update to it and sign again." : ""), ex);
+        }
+
+        string? said = content.SteamAccount is null
+            ? $"The service signed this backup for Steam {Identity.Account(signer.AccountId)}, and the settings name no Steam account to check that against. "
+              + "If you did not sign in as that account in the browser, someone else's sign-in reached acb first."
+            : signer.OtherAccount(content.SteamAccount) is not null
+                ? $"The service signed this backup for Steam {Identity.Account(signer.AccountId)}, but the settings are from {Identity.Account(content.SteamAccount)}. "
+                  + "If you did not sign in as that account in the browser, someone else's sign-in reached acb first."
+                : null;
+        if (said is not null)
+        {
+            if (otherSigner?.Invoke(said) != true)
+            {
+                throw new IOException(said + " No backup was written.");
+            }
         }
 
         return envelopeBytes;

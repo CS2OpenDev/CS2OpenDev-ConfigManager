@@ -34,11 +34,18 @@ internal sealed class BackupScreen : IDisposable
     /// <summary>Picks where to save; null when the person cancels.</summary>
     public Func<string, string?> PickSave { get; set; }
 
+    /// <summary>
+    ///     Saves a backup that is signed: off the screen's thread, in a box that shows the sign-in address and can
+    ///     cancel. A stand-in in tests.
+    /// </summary>
+    public Action<BackupFlow> SignIn { get; set; }
+
     public BackupScreen(BackupFlow flow)
     {
         _flow = flow;
         AskPassphrase = () => Dialogs.NewPassphrase(Shell!.Window.App);
         PickSave = suggested => Dialogs.Save(Shell!.Window.App, "Save the backup as", suggested);
+        SignIn = signed => Dialogs.Working(Shell!.Window.App, "Signing in with Steam", (words, cancel) => signed.Save(words, cancel));
 
         View what = new() { CanFocus = true };
         _partDetail.Y = Pos.AnchorEnd(9);
@@ -222,7 +229,15 @@ internal sealed class BackupScreen : IDisposable
             return problem;
         }
 
-        _flow.Save();
+        if (_flow.Sign)
+        {
+            SignIn(_flow);
+        }
+        else
+        {
+            _flow.Save();
+        }
+
         return _flow.Saved ? null : _flow.SaveProblem;
     }
 }

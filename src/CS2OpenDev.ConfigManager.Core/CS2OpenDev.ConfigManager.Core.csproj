@@ -18,6 +18,8 @@
         <InternalsVisibleTo Include="CS2OpenDev.ConfigManager.Core.Tests"/>
         <InternalsVisibleTo Include="acb"/>
         <InternalsVisibleTo Include="CS2OpenDev.ConfigManager.Cli.Tests"/>
+        <InternalsVisibleTo Include="CS2OpenDev.ConfigManager.DemoViewer.Tests"/>
+        <InternalsVisibleTo Include="CS2OpenDev.ConfigManager.IdentityIssuer"/>
     </ItemGroup>
 
 </Project>

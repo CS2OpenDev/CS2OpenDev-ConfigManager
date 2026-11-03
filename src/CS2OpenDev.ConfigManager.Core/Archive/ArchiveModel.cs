@@ -74,14 +74,18 @@ public sealed record ArchiveSection(string Id, string Label, IReadOnlyList<strin
 
 public sealed record ArchiveEntry(string Path, long Size, string Sha256);
 
+/// <summary>
+///     The manifest. <see cref="SteamAccount" /> is the one member a manifest may leave out, so it is last here and
+///     ordered back after the tool when written.
+/// </summary>
 public sealed record ArchiveManifest(
     string Format,
     string Platform,
     DateTimeOffset Created,
     ArchiveTool Tool,
-    string? SteamAccount,
-    IReadOnlyList<ArchiveSection> Sections,
-    IReadOnlyList<ArchiveEntry> Entries);
+    [property: JsonPropertyOrder(1)] IReadOnlyList<ArchiveSection> Sections,
+    [property: JsonPropertyOrder(1)] IReadOnlyList<ArchiveEntry> Entries,
+    string? SteamAccount = null);
 
 public sealed record DigestSet([property: JsonPropertyName("sha256")] string Sha256);
 
@@ -111,7 +115,9 @@ public sealed record DsseEnvelope(string PayloadType, string Payload, IReadOnlyL
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     AllowTrailingCommas = false,
     ReadCommentHandling = JsonCommentHandling.Disallow,
-    UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow)]
+    UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+    RespectNullableAnnotations = true,
+    RespectRequiredConstructorParameters = true)]
 [JsonSerializable(typeof(ArchiveManifest))]
 [JsonSerializable(typeof(Statement))]
 [JsonSerializable(typeof(DsseEnvelope))]
@@ -120,7 +126,8 @@ internal sealed partial class ArchiveJson : JsonSerializerContext
 {
     /// <summary>
     ///     The options every archive document is written and read with. Unknown members are refused, so a field a
-    ///     later format adds cannot be slipped past this reader as ignored data. Relaxed escaping keeps paths and
+    ///     later format adds cannot be slipped past this reader as ignored data, and so are a missing member and a
+    ///     null where the type has none, so a crafted document is refused rather than read as nulls. Relaxed escaping keeps paths and
     ///     labels readable in a text editor; the documents are never embedded in HTML.
     /// </summary>
     internal static ArchiveJson Strict { get; } = new(new JsonSerializerOptions
@@ -131,6 +138,8 @@ internal sealed partial class ArchiveJson : JsonSerializerContext
         AllowTrailingCommas = false,
         ReadCommentHandling = JsonCommentHandling.Disallow,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        RespectNullableAnnotations = true,
+        RespectRequiredConstructorParameters = true,
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     });
 }

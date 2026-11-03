@@ -4,7 +4,11 @@ using System.Text.Json;
 namespace CS2OpenDev.ConfigManager.Archive;
 
 /// <summary>Why an archive was refused. <see cref="Exception.Message" /> is written for the person restoring.</summary>
-public class ArchiveRejectedException(string message) : Exception(message);
+public class ArchiveRejectedException(string message) : Exception(message)
+{
+    /// <summary>The backup may be sound and only newer than this version, which then cannot check it; a newer version may.</summary>
+    public bool MayBeNewer { get; init; }
+}
 
 /// <summary>
 ///     A sealed archive that was not opened: no passphrase was given (<see cref="Wrong" /> false), or the one given
@@ -20,6 +24,18 @@ public sealed class SealNotOpenedException(string message, bool wrong) : Archive
     public bool Wrong { get; } = wrong;
 }
 
+/// <summary>
+///     An identity backup whose signature checks but whose signing key was revoked, so the signature counts for
+///     nothing. The reader throws it only once every file has matched the manifest, so the backup is still known to
+///     be unchanged since it was made (the hash level); only who made it is not proven. <see cref="Claimed" /> is the
+///     signer the signature names. Opening with <see cref="ArchiveReadOptions.AcceptRevoked" /> reads it at the hash
+///     level instead.
+/// </summary>
+public sealed class RevokedSignatureException(string message, IdentitySigner claimed) : ArchiveRejectedException(message)
+{
+    public IdentitySigner Claimed { get; } = claimed;
+}
+
 public sealed record ArchiveReadOptions
 {
     /// <summary>The platform the archive must be for; null to read any (checking or showing, never restoring).</summary>
@@ -32,6 +48,13 @@ public sealed record ArchiveReadOptions
 
     /// <summary>A sealed archive's key, handed on by the run that derived it; tried before <see cref="Passphrase" />.</summary>
     internal byte[]? SealKey { get; init; }
+
+    /// <summary>
+    ///     Reads an identity backup signed with a revoked key at the hash level, with the signer it claims in
+    ///     <see cref="VerifiedArchive.RevokedSigner" />, instead of refusing it. Whoever sets it has decided that a
+    ///     backup only known to be unchanged will do; <see cref="MinimumLevel" /> does not then apply to it.
+    /// </summary>
+    public bool AcceptRevoked { get; init; }
 }
 
 /// <summary>
@@ -43,9 +66,10 @@ public sealed class VerifiedArchive
     private readonly Dictionary<string, byte[]> _entries;
 
     internal VerifiedArchive(ArchiveManifest manifest, TrustLevel level, string manifestSha256, Dictionary<string, byte[]> entries,
-        string? signer = null, SealKey? sealKey = null, IdentitySigner? identity = null)
+        string? signer = null, SealKey? sealKey = null, IdentitySigner? identity = null, IdentitySigner? revoked = null)
     {
         Manifest = manifest;
+        RevokedSigner = revoked;
         Level = level;
         Signer = signer;
         IdentitySigner = identity;
@@ -66,6 +90,13 @@ public sealed class VerifiedArchive
 
     /// <summary>Who signed it and when, with which key, at the identity level; null below it.</summary>
     public IdentitySigner? IdentitySigner { get; }
+
+    /// <summary>
+    ///     The signer an identity signature names when its key was revoked and the backup was read anyway, at the
+    ///     hash level (<see cref="ArchiveReadOptions.AcceptRevoked" />). Not proven: anyone holding the stolen key could
+    ///     have made it. Null otherwise.
+    /// </summary>
+    public IdentitySigner? RevokedSigner { get; }
 
     /// <summary>The key that opened a sealed archive, so a second run (the administrator's) need not ask again; null below the seal level.</summary>
     public SealKey? SealKey { get; }
@@ -117,11 +148,15 @@ public static class ArchiveReader
 
         byte[] manifestBytes = Take(raw, ArchiveFormat.ManifestEntry);
         byte[] envelopeBytes = Take(raw, ArchiveFormat.SignatureEntry);
-        ArchiveManifest manifest = Parse(manifestBytes, ArchiveJson.Strict.ArchiveManifest, ArchiveFormat.ManifestEntry);
+        ArchiveManifest manifest = ParseManifest(manifestBytes);
+        if (manifest.Sections.Any(s => s is null) || manifest.Entries.Any(e => e is null))
+        {
+            throw new ArchiveRejectedException("manifest.json lists a section or a file as null.");
+        }
 
         if (manifest.Format != ArchiveFormat.Format)
         {
-            throw new ArchiveRejectedException($"This backup is format '{manifest.Format}', which this version does not read. A newer version may.");
+            throw NewerFormat(manifest.Format);
         }
 
         if (!Platforms.IsKnown(manifest.Platform))
@@ -135,7 +170,26 @@ public static class ArchiveReader
         }
 
         string manifestSha = Dsse.Sha256Hex(manifestBytes);
-        (TrustLevel level, SealKey? key, IdentitySigner? signer) = VerifyEnvelope(envelopeBytes, manifestSha, options);
+        TrustLevel level;
+        SealKey? key;
+        IdentitySigner? signer;
+        try
+        {
+            (level, key, signer) = VerifyEnvelope(envelopeBytes, manifestSha, options, IdentityTrust.Current, DateTimeOffset.UtcNow);
+        }
+        catch (RevokedSignatureException revoked)
+        {
+            // Said only once the files are known to match, so "unchanged" is true when it is said.
+            VerifyEntries(manifest, raw);
+            if (!options.AcceptRevoked)
+            {
+                throw new RevokedSignatureException(revoked.Message + " Its files all match its manifest, so it is unchanged since it was made "
+                                                    + "(the hash level); only who made it is not proven.", revoked.Claimed);
+            }
+
+            return new VerifiedArchive(manifest, TrustLevel.Hash, manifestSha, raw, revoked: revoked.Claimed);
+        }
+
         if (level < options.MinimumLevel)
         {
             throw new ArchiveRejectedException($"This backup is at the '{Name(level)}' level and at least '{Name(options.MinimumLevel)}' is required.");
@@ -145,14 +199,14 @@ public static class ArchiveReader
         return new VerifiedArchive(manifest, level, manifestSha, raw, signer?.SteamId64, key, signer);
     }
 
-    /// <summary>Checks an envelope for a manifest at <paramref name="level" />, throwing what a reader would refuse it for.</summary>
-    internal static void CheckEnvelope(byte[] envelopeBytes, string manifestSha, TrustLevel level)
+    /// <summary>
+    ///     Checks an envelope for a manifest at <paramref name="level" />, throwing what a reader would refuse it for,
+    ///     and returns its signer at the identity level.
+    /// </summary>
+    internal static IdentitySigner? CheckEnvelope(byte[] envelopeBytes, string manifestSha, TrustLevel level, IdentityTrust trust, DateTimeOffset now)
     {
-        (TrustLevel got, _, _) = VerifyEnvelope(envelopeBytes, manifestSha, new ArchiveReadOptions());
-        if (got != level)
-        {
-            throw new ArchiveRejectedException($"it is at the '{Name(got)}' level, not '{Name(level)}'");
-        }
+        (TrustLevel got, _, IdentitySigner? signer) = VerifyEnvelope(envelopeBytes, manifestSha, new ArchiveReadOptions(), trust, now);
+        return got == level ? signer : throw new ArchiveRejectedException($"it is at the '{Name(got)}' level, not '{Name(level)}'");
     }
 
     public static string Name(TrustLevel level) => level switch
@@ -242,11 +296,20 @@ public static class ArchiveReader
         return bytes;
     }
 
-    private static T Parse<T>(byte[] bytes, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> type, string what)
+    /// <summary>
+    ///     A JSON document read strictly. When <paramref name="mayBeNewer" />, a document this version cannot read is
+    ///     said to be damaged or from a newer version, since a later one may add a member.
+    /// </summary>
+    private static T Parse<T>(byte[] bytes, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> type, string what, bool mayBeNewer = false)
     {
         try
         {
             return JsonSerializer.Deserialize(bytes, type) ?? throw new ArchiveRejectedException($"The backup's {what} is empty.");
+        }
+        catch (JsonException ex) when (mayBeNewer)
+        {
+            throw new ArchiveRejectedException($"The backup's {what} cannot be read by this version, so it is damaged or from a newer one, which may read it: "
+                                               + ex.Message) { MayBeNewer = true };
         }
         catch (JsonException ex)
         {
@@ -254,12 +317,58 @@ public static class ArchiveReader
         }
     }
 
-    private static (TrustLevel, SealKey?, IdentitySigner?) VerifyEnvelope(byte[] envelopeBytes, string manifestSha, ArchiveReadOptions options)
+    /// <summary>
+    ///     manifest.json, read strictly. One that does not read but names another format is refused as that format,
+    ///     so a later format that adds a member is not reported as damage.
+    /// </summary>
+    private static ArchiveManifest ParseManifest(byte[] bytes)
+    {
+        try
+        {
+            return Parse(bytes, ArchiveJson.Strict.ArchiveManifest, ArchiveFormat.ManifestEntry);
+        }
+        catch (ArchiveRejectedException)
+        {
+            string? format = null;
+            try
+            {
+                using JsonDocument document = JsonDocument.Parse(bytes);
+                if (document.RootElement.ValueKind == JsonValueKind.Object && document.RootElement.TryGetProperty("format", out JsonElement value)
+                    && value.ValueKind == JsonValueKind.String)
+                {
+                    format = value.GetString();
+                }
+            }
+            catch (JsonException)
+            {
+            }
+
+            if (format is not null && format != ArchiveFormat.Format)
+            {
+                throw NewerFormat(format);
+            }
+
+            throw;
+        }
+    }
+
+    private static ArchiveRejectedException NewerFormat(string format) =>
+        new($"This backup is format '{format}', which this version does not read. A newer version may.") { MayBeNewer = true };
+
+    private static (TrustLevel, SealKey?, IdentitySigner?) VerifyEnvelope(byte[] envelopeBytes, string manifestSha, ArchiveReadOptions options,
+        IdentityTrust trust, DateTimeOffset now)
     {
         DsseEnvelope envelope = Parse(envelopeBytes, ArchiveJson.Strict.DsseEnvelope, ArchiveFormat.SignatureEntry);
+        if (envelope.Signatures.Any(s => s is null))
+        {
+            throw new ArchiveRejectedException("The backup's signature lists a null signature.");
+        }
         if (envelope.PayloadType != ArchiveFormat.PayloadType)
         {
-            throw new ArchiveRejectedException($"The backup's signature carries '{envelope.PayloadType}', not a statement this version reads.");
+            throw new ArchiveRejectedException($"The backup's signature carries '{envelope.PayloadType}', not a statement this version reads. A newer version may.")
+            {
+                MayBeNewer = true
+            };
         }
 
         byte[] payload;
@@ -272,10 +381,10 @@ public static class ArchiveReader
             throw new ArchiveRejectedException("The backup's signature payload is not base64.");
         }
 
-        Statement statement = Parse(payload, ArchiveJson.Strict.Statement, "signature statement");
+        Statement statement = Parse(payload, ArchiveJson.Strict.Statement, "signature statement", mayBeNewer: true);
         if (statement.Type != ArchiveFormat.StatementType || statement.PredicateType != ArchiveFormat.PredicateType)
         {
-            throw new ArchiveRejectedException("The backup's signature statement is not one this version reads.");
+            throw new ArchiveRejectedException("The backup's signature statement is not one this version reads. A newer version may.") { MayBeNewer = true };
         }
 
         if (statement.Subject is not [{ Name: ArchiveFormat.ManifestEntry } subject] || subject.Digest.Sha256 != manifestSha)
@@ -301,9 +410,12 @@ public static class ArchiveReader
 
                 return (TrustLevel.Seal, VerifySeal(envelope, payload, statement.Predicate.Kdf, options), null);
             case "identity":
-                return (TrustLevel.Identity, null, Identity.Verify(envelope, payload, statement.Predicate, IdentityTrust.Current, DateTimeOffset.UtcNow));
+                return (TrustLevel.Identity, null, Identity.Verify(envelope, payload, statement.Predicate, trust, now));
             default:
-                throw new ArchiveRejectedException($"The backup claims a trust level '{statement.Predicate.Level}' this version does not know.");
+                throw new ArchiveRejectedException($"The backup claims a trust level '{statement.Predicate.Level}' this version does not know. A newer version may.")
+                {
+                    MayBeNewer = true
+                };
         }
     }
 

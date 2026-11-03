@@ -81,7 +81,10 @@ internal sealed class RestoreFlow
         return Reopen();
     }
 
-    /// <summary>What Check shows: the backup's level, when and by what it was made, its account and digest, and the policy.</summary>
+    /// <summary>Whether the backup open now carries this acb as its restorer, so its maker chose the acb that checked it.</summary>
+    public bool CheckedByCarriedRestorer => Archive is { } archive && Archives.IsThisAcb(archive, _host);
+
+    /// <summary>What Check shows, as <c>acb verify</c> does: the level and signer, when and by what it was made, whose settings, the digest, and the policy.</summary>
     public IReadOnlyList<string> CheckLines()
     {
         List<string> lines = [];
@@ -90,11 +93,12 @@ internal sealed class RestoreFlow
             ArchiveManifest manifest = archive.Manifest;
             lines.Add("Backup:   " + Output.Printable(Path.GetFullPath(ArchivePath)));
             lines.Add("Level:    " + Archives.LevelText(archive.Level));
+            lines.AddRange(Archives.SignerLines(archive, _host));
             lines.Add(Output.Printable(string.Create(CultureInfo.InvariantCulture,
                 $"Made:     {manifest.Created:yyyy-MM-dd HH:mm}Z by {manifest.Tool.Name} {manifest.Tool.Version}, on {manifest.Platform}")));
             if (manifest.SteamAccount is not null)
             {
-                lines.Add("Account:  Steam account " + Output.Printable(manifest.SteamAccount));
+                lines.Add("Settings: Steam account " + Output.Printable(manifest.SteamAccount) + "'s (as the backup says)");
             }
 
             lines.Add("Digest:   " + archive.ManifestSha256);
@@ -368,11 +372,18 @@ internal sealed class RestoreFlow
         return (Outcomes.Skipped, "not chosen");
     }
 
+    /// <summary>The backup the person said to use although its signing key was revoked; reset by picking another.</summary>
+    public string? RevokedAccepted { get; set; }
+
+    /// <summary>The last check refused the backup because its signing key was revoked, though its files match.</summary>
+    public bool RevokedRefusal { get; private set; }
+
     /// <summary>Opens the session again with what the person picked, so every change goes through the same rules, and previews it.</summary>
     private bool Reopen()
     {
         Refusal = null;
         SealRefusal = null;
+        RevokedRefusal = false;
         Archive = null;
         Session = null;
         if (ArchivePath.Length == 0)
@@ -388,7 +399,8 @@ internal sealed class RestoreFlow
         {
             // Tried once: the screen asks again in its own dialog when the seal does not open.
             Passphrase = again => again || passphrase.Length == 0 ? null : passphrase,
-            SealKey = key
+            SealKey = key,
+            AcceptRevoked = RevokedAccepted == ArchivePath
         };
         try
         {
@@ -399,6 +411,7 @@ internal sealed class RestoreFlow
             _sealKey = null;
             Archive = ex.Archive;
             Refusal = ex.Message;
+            RevokedRefusal = ex.Revoked;
             SealRefusal = ex.Message is SealNotOpenedException.NeededMessage or SealNotOpenedException.WrongMessage ? ex.Message : null;
             return false;
         }

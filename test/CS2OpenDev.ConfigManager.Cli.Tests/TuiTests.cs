@@ -291,6 +291,55 @@ public class TuiTests
         await Assert.That(lines).IsEquivalentTo(["  one two", "    three", "    four", "    five"]);
     }
 
+    /// <summary>
+    ///     Esc in the working box cancels the work but keeps the box up until the work has stopped, so nothing it says
+    ///     afterwards lands on a box that is gone.
+    /// </summary>
+    [Test]
+    [NotInParallel("terminal")]
+    public async Task Working_Esc_CancelsTheWork_AndTheBoxWaitsForItToStop()
+    {
+        if (NoTerminal())
+        {
+            return;
+        }
+
+        using IApplication app = Application.Create();
+        app.Init(DriverRegistry.Names.ANSI);
+        app.Driver!.SetScreenSize(120, 36);
+        bool cancelled = false;
+        bool stopped = false;
+        bool upAfterEsc = false;
+        string? shown = null;
+        app.AddTimeout(TimeSpan.FromMilliseconds(100), () =>
+        {
+            app.InjectKey(Key.Esc);
+            return false;
+        });
+        app.AddTimeout(TimeSpan.FromMilliseconds(400), () =>
+        {
+            upAfterEsc = app.TopRunnableView is Dialog;
+            app.LayoutAndDraw(true);
+            shown = app.Driver.ToString();
+            return false;
+        });
+
+        Dialogs.Working(app, "Signing in with Steam", (words, cancel) =>
+        {
+            words.WriteLine("Open http://127.0.0.1/sign-in");
+            cancelled = cancel.WaitHandle.WaitOne(TimeSpan.FromSeconds(10));
+            Thread.Sleep(800);
+            words.WriteLine("too late to show");
+            stopped = true;
+        });
+
+        await Assert.That(cancelled).IsTrue().Because("Esc cancels the work");
+        await Assert.That(stopped).IsTrue().Because("Working returns only once the work has ended");
+        await Assert.That(upAfterEsc).IsTrue().Because("the box stays up while the work stops");
+        await Assert.That(shown).Contains("Cancelling...");
+        await Assert.That(shown).Contains("http://127.0.0.1/sign-in");
+    }
+
     /// <summary>On Linux Terminal.Gui's driver waits on the terminal it starts in; CI runs the suite under script(1) to give it one.</summary>
     private static bool NoTerminal()
     {

@@ -45,6 +45,15 @@ internal sealed class CommandReport
 
     public DateTimeOffset? SignedAt { get; set; }
 
+    /// <summary>The day the revoked keys that signature was checked against date from; a key stolen since still checks.</summary>
+    public DateOnly? RevokedAsOf { get; set; }
+
+    /// <summary>The SteamID64 a signature names when its key was revoked and the backup was read at the hash level anyway.</summary>
+    public string? RevokedSignature { get; set; }
+
+    /// <summary>The revoked key that signature was made with.</summary>
+    public string? RevokedKey { get; set; }
+
     /// <summary>The SHA-256 of the restorer a self-contained backup carries; null when it carries none.</summary>
     public string? RestorerSha256 { get; set; }
 

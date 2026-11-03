@@ -6,6 +6,16 @@ using CS2OpenDev.ConfigManager.Kit;
 
 namespace CS2OpenDev.ConfigManager.Restoring;
 
+/// <summary>What a policy does with a backup whose identity signature was made with a revoked key.</summary>
+public enum RevokedSignatures
+{
+    /// <summary>Refuse it; only an administrator's <c>--accept-revoked</c> applies it, for that one restore.</summary>
+    Refuse,
+
+    /// <summary>Say so and ask the person, as acb does with no policy; read it at the hash level on a yes.</summary>
+    Ask
+}
+
 /// <summary>Why a policy file was refused. Nothing is restored under a policy that cannot be read whole.</summary>
 public sealed class PolicyException(string message) : Exception(message);
 
@@ -18,8 +28,12 @@ public sealed class PolicyException(string message) : Exception(message);
 public sealed class OrganiserPolicy
 {
     private OrganiserPolicy(TrustLevel minimumLevel, IReadOnlyList<string>? steamIds, IReadOnlyList<string>? allowSections,
-        IReadOnlySet<uint> nvidiaDeny, bool requireCs2Closed, string sha256)
+        IReadOnlySet<uint> nvidiaDeny, bool requireCs2Closed, string sha256, RevokedSignatures revoked, bool refuseCarriedRestorer,
+        string? minimumAcbVersion)
     {
+        Revoked = revoked;
+        RefuseCarriedRestorer = refuseCarriedRestorer;
+        MinimumAcbVersion = minimumAcbVersion;
         MinimumLevel = minimumLevel;
         SteamIds = steamIds;
         AllowSections = allowSections;
@@ -42,6 +56,25 @@ public sealed class OrganiserPolicy
 
     /// <summary>Refuse the whole restore while CS2 runs, rather than leaving only its sections for later.</summary>
     public bool RequireCs2Closed { get; }
+
+    /// <summary>
+    ///     What happens to a backup signed with a revoked key. Unless the file says, <see cref="RevokedSignatures.Refuse" />
+    ///     when the policy needs a signature (a level above hash, or Steam IDs), and <see cref="RevokedSignatures.Ask" />
+    ///     otherwise, as with no policy.
+    /// </summary>
+    public RevokedSignatures Revoked { get; }
+
+    /// <summary>
+    ///     Refuse to check or restore with the copy of acb a backup carries. Whoever made the backup chose that copy, and
+    ///     an old one does not know the keys revoked since it was built; the organiser's own acb does.
+    /// </summary>
+    public bool RefuseCarriedRestorer { get; }
+
+    /// <summary>The oldest acb version that may check or restore under this policy, or null for any.</summary>
+    public string? MinimumAcbVersion { get; }
+
+    /// <summary>Whether the policy asks for more than the hash level: a minimum level above it, or named Steam accounts.</summary>
+    public bool NeedsSignature => MinimumLevel > TrustLevel.Hash || SteamIds is not null;
 
     /// <summary>The file's SHA-256, so an elevated rerun applies the very policy the person ran with.</summary>
     public string Sha256 { get; }
@@ -113,13 +146,54 @@ public sealed class OrganiserPolicy
             deny.Add(value);
         }
 
-        return new OrganiserPolicy(level, document.SteamIds, document.Sections?.Allow, deny, document.RequireCs2Closed ?? false, Dsse.Sha256Hex(bytes));
+        bool needsSignature = level > TrustLevel.Hash || document.SteamIds is not null;
+        RevokedSignatures revoked = document.RevokedSignatures switch
+        {
+            null => needsSignature ? RevokedSignatures.Refuse : RevokedSignatures.Ask,
+            "refuse" => RevokedSignatures.Refuse,
+            "ask" => RevokedSignatures.Ask,
+            _ => throw new PolicyException($"The policy's revokedSignatures '{document.RevokedSignatures}' is not refuse or ask.")
+        };
+
+        if (document.MinimumAcbVersion is { } minimum && !AcbVersion.TryParse(minimum, out _))
+        {
+            throw new PolicyException($"The policy's minimumAcbVersion '{minimum}' is not a version such as 1.2.0.");
+        }
+
+        return new OrganiserPolicy(level, document.SteamIds, document.Sections?.Allow, deny, document.RequireCs2Closed ?? false, Dsse.Sha256Hex(bytes),
+            revoked, document.RefuseCarriedRestorer ?? false, document.MinimumAcbVersion);
+    }
+
+    /// <summary>
+    ///     Why the policy refuses the acb doing the check: older than <see cref="MinimumAcbVersion" />, or the copy the
+    ///     backup carries when <see cref="RefuseCarriedRestorer" /> is set. Null when it may go on.
+    /// </summary>
+    public string? AcbProblem(string acbVersion, bool isCarriedRestorer)
+    {
+        if (MinimumAcbVersion is { } minimum && AcbVersion.Compare(acbVersion, minimum) < 0)
+        {
+            return $"the policy needs acb {minimum} or newer, and this is acb {acbVersion}. Check and restore it with a newer acb";
+        }
+
+        return RefuseCarriedRestorer && isCarriedRestorer
+            ? "the policy does not let a backup be checked or restored by the copy of acb it carries, which whoever made the backup chose. "
+              + "Run the organiser's own acb on it"
+            : null;
     }
 
     /// <summary>Why the policy refuses an archive the reader accepted, or null.</summary>
     public string? ArchiveProblem(VerifiedArchive archive)
     {
         ArgumentNullException.ThrowIfNull(archive);
+
+        // Read with a revoked key only once the policy or an administrator agreed to; its claimed signer is all there is to compare.
+        if (archive.RevokedSigner is { } claimed)
+        {
+            return SteamIds is not null && !SteamIds.Contains(claimed.SteamId64, StringComparer.Ordinal)
+                ? $"the policy accepts backups signed by {string.Join(", ", SteamIds)}, and this one's revoked signature names {claimed.SteamId64}"
+                : null;
+        }
+
         if (archive.Level < MinimumLevel)
         {
             return $"the policy requires at least the '{ArchiveReader.Name(MinimumLevel)}' level and this backup is '{ArchiveReader.Name(archive.Level)}'";
@@ -153,7 +227,74 @@ internal sealed record PolicyDocument(
     IReadOnlyList<string>? SteamIds,
     PolicySections? Sections,
     PolicyNvidia? Nvidia,
-    bool? RequireCs2Closed);
+    bool? RequireCs2Closed,
+    string? RevokedSignatures = null,
+    bool? RefuseCarriedRestorer = null,
+    string? MinimumAcbVersion = null);
+
+/// <summary>
+///     acb's versions (<c>1.2.0</c>, <c>0.1.0-alpha</c>) in order: by major, minor and patch, and a pre-release before
+///     its release. Pre-release labels compare as text, which is enough for one product's own tags.
+/// </summary>
+public static class AcbVersion
+{
+    public static bool TryParse(string? text, out (int Major, int Minor, int Patch, string? Pre) version)
+    {
+        version = default;
+        if (string.IsNullOrEmpty(text))
+        {
+            return false;
+        }
+
+        string core = text.Split('+')[0];
+        int dash = core.IndexOf('-', StringComparison.Ordinal);
+        string? pre = dash < 0 ? null : core[(dash + 1)..];
+        string[] parts = (dash < 0 ? core : core[..dash]).Split('.');
+        if (parts.Length != 3 || pre is { Length: 0 })
+        {
+            return false;
+        }
+
+        int[] numbers = new int[3];
+        for (int i = 0; i < 3; i++)
+        {
+            if (parts[i].Length is 0 or > 9 || !parts[i].All(char.IsAsciiDigit))
+            {
+                return false;
+            }
+
+            numbers[i] = int.Parse(parts[i], CultureInfo.InvariantCulture);
+        }
+
+        version = (numbers[0], numbers[1], numbers[2], pre);
+        return true;
+    }
+
+    /// <summary>Negative when <paramref name="a" /> is older; a version that does not parse counts as the oldest.</summary>
+    public static int Compare(string a, string b)
+    {
+        bool hasA = TryParse(a, out var x);
+        bool hasB = TryParse(b, out var y);
+        if (!hasA || !hasB)
+        {
+            return hasA == hasB ? 0 : hasA ? 1 : -1;
+        }
+
+        int byNumber = (x.Major, x.Minor, x.Patch).CompareTo((y.Major, y.Minor, y.Patch));
+        if (byNumber != 0)
+        {
+            return byNumber;
+        }
+
+        return (x.Pre, y.Pre) switch
+        {
+            (null, null) => 0,
+            (null, _) => 1,
+            (_, null) => -1,
+            _ => string.CompareOrdinal(x.Pre, y.Pre)
+        };
+    }
+}
 
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,

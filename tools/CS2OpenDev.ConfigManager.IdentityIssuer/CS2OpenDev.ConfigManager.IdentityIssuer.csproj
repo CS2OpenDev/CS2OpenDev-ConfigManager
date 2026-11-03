@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- The signing side of the identity level: delegations, signed statements and the key ceremony. Referenced by
+         the ceremony tool and the tests, and by the service when it is built; never by acb or the plugin, which
+         only check signatures. -->
+    <PropertyGroup>
+        <RootNamespace>CS2OpenDev.ConfigManager</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\src\CS2OpenDev.ConfigManager.Core\CS2OpenDev.ConfigManager.Core.csproj"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="CS2OpenDev.ConfigManager.Core.Tests"/>
+    </ItemGroup>
+
+</Project>

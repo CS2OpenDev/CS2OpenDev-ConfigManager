@@ -13,6 +13,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\..\src\CS2OpenDev.ConfigManager.Core\CS2OpenDev.ConfigManager.Core.csproj"/>
+        <ProjectReference Include="..\..\tools\CS2OpenDev.ConfigManager.IdentityIssuer\CS2OpenDev.ConfigManager.IdentityIssuer.csproj"/>
     </ItemGroup>
 
 </Project>

@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using CS2OpenDev.ConfigManager.Archive;
 using CS2OpenDev.ConfigManager.Kit;
 using CS2OpenDev.ConfigManager.Restoring;
@@ -59,15 +60,33 @@ internal sealed class AcbHost
     /// <summary>The registry, power plans and driver the engine reads and changes; null is this PC. Tests pass a fake.</summary>
     internal IMachine? Machine { get; init; }
 
-    /// <summary>The CS2OpenDev service that signs backups for a Steam account (ACB_IDENTITY_SERVICE); null when none is set.</summary>
+    /// <summary>
+    ///     The CS2OpenDev service that signs backups for a Steam account: ACB_IDENTITY_SERVICE, else the one this build
+    ///     knows; null when there is neither. Only the one this build knows is signed through.
+    /// </summary>
     public string? IdentityService { get; init; }
 
     /// <summary>
-    ///     The signer for a service address, its sign-in words going to the writer given. The real one signs in
-    ///     through the browser; tests give a stand-in that signs with test keys.
+    ///     The signer for a service address, its sign-in words going to the writer given, stopping when the token is
+    ///     cancelled. The real one signs in through the browser; tests give a stand-in that signs with test keys.
     /// </summary>
-    public Func<string, TextWriter, Archive.IIdentitySigner> IdentitySigner { get; init; } =
-        (service, words) => new ServiceSigner(service, new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, OpenBrowser, words);
+    public Func<string, TextWriter, CancellationToken, Archive.IIdentitySigner> IdentitySigner { get; init; } =
+        (service, words, cancel) => new ServiceSigner(service, new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, OpenBrowser, words, cancel: cancel);
+
+    /// <summary>
+    ///     Why signing in through a browser cannot work here; null when it can. The sign-in comes back to a port on
+    ///     this PC, so a browser on another PC (an SSH session's) or none at all (no desktop) never finishes it.
+    /// </summary>
+    public string? BrowserSignInProblem { get; init; }
+
+    /// <summary>
+    ///     Calls the action on the first Ctrl+C instead of ending acb, until the handle returned is disposed, so a run
+    ///     can stop cleanly; a second Ctrl+C ends acb as usual. Tests give a stand-in.
+    /// </summary>
+    public Func<Action, IDisposable> OnInterrupt { get; init; } = CatchInterrupt;
+
+    /// <summary>acb runs as an administrator: elevated on Windows, root on Linux. Only then may it override a policy that refuses a revoked signature.</summary>
+    public Func<bool> IsAdministrator { get; init; } = () => Environment.IsPrivilegedProcess;
 
     /// <summary>This acb's own program file: what <c>backup --self-contained</c> carries, and what a carried restorer is compared with.</summary>
     public string? Executable { get; init; }
@@ -106,7 +125,8 @@ internal sealed class AcbHost
         ConnectElevated = pipe => OperatingSystem.IsWindows() ? WindowsElevator.Connect(pipe) : null,
         Now = () => DateTimeOffset.Now,
         Executable = Environment.ProcessPath,
-        IdentityService = Environment.GetEnvironmentVariable("ACB_IDENTITY_SERVICE") is { Length: > 0 } service ? service : null,
+        IdentityService = Environment.GetEnvironmentVariable("ACB_IDENTITY_SERVICE") is { Length: > 0 } service ? service : IdentityServiceAddress.Current?.Service,
+        BrowserSignInProblem = SignInProblem(Environment.GetEnvironmentVariable, OperatingSystem.IsLinux()),
         Wizard = CS2OpenDev.ConfigManager.Cli.Wizard.Tui.Run,
         EnsureMachineStore = (root, parent) =>
         {
@@ -138,23 +158,90 @@ internal sealed class AcbHost
         ConnectElevated = ConnectElevated,
         Now = Now,
         Executable = Executable,
+        IsAdministrator = IsAdministrator,
         IdentityService = IdentityService,
         IdentitySigner = IdentitySigner,
+        BrowserSignInProblem = BrowserSignInProblem,
+        OnInterrupt = OnInterrupt,
         EnsureMachineStore = EnsureMachineStore,
         BeforeRollback = BeforeRollback,
         StartNvidia = StartNvidia,
         DriverTimeoutMs = DriverTimeoutMs
     };
 
-    /// <summary>Opens a web page in the person's browser; false when none could be started.</summary>
+    private static readonly string[] SshVariables = ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"];
+
+    /// <summary>
+    ///     Why a browser sign-in cannot come back to acb, from the environment: an SSH session (the browser that
+    ///     opens the address is on the other PC), or on Linux no desktop to open a browser on. Null when it can.
+    /// </summary>
+    internal static string? SignInProblem(Func<string, string?> environment, bool linux)
+    {
+        if (SshVariables.Any(name => !string.IsNullOrEmpty(environment(name))))
+        {
+            return "acb is running in an SSH session, and signing in comes back to this PC, so it needs a browser on this PC, not on the one you connect from";
+        }
+
+        return linux && string.IsNullOrEmpty(environment("DISPLAY")) && string.IsNullOrEmpty(environment("WAYLAND_DISPLAY"))
+            ? "this session has no desktop to open a browser on, and signing in comes back to this PC, so it needs a browser on this PC"
+            : null;
+    }
+
+    private static IDisposable CatchInterrupt(Action interrupted)
+    {
+        Func<bool> first = FirstOnly(interrupted);
+        return PosixSignalRegistration.Create(PosixSignal.SIGINT, context => context.Cancel = first());
+    }
+
+    /// <summary>
+    ///     Calls the action on the first Ctrl+C and says to keep acb running; any later one is let through, so a step
+    ///     that does not stop on the first (a prompt, a read that hangs) can still be ended.
+    /// </summary>
+    internal static Func<bool> FirstOnly(Action interrupted)
+    {
+        int seen = 0;
+        return () =>
+        {
+            if (Interlocked.Increment(ref seen) != 1)
+            {
+                return false;
+            }
+
+            interrupted();
+            return true;
+        };
+    }
+
+    /// <summary>
+    ///     Opens a web page in the person's browser; false when none could be started. Only an https page (or http on
+    ///     this PC, for a test's stand-in) is opened, so no other kind of address reaches the shell. On Linux xdg-open and
+    ///     the browser it starts get no terminal, so nothing they print lands on the screens.
+    /// </summary>
     private static bool OpenBrowser(string url)
     {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? page) || !(page.Scheme == Uri.UriSchemeHttps || (page.Scheme == Uri.UriSchemeHttp && page.IsLoopback)))
+        {
+            return false;
+        }
+
         try
         {
-            using System.Diagnostics.Process? started = OperatingSystem.IsWindows()
-                ? System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true })
-                : System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("xdg-open", [url]) { UseShellExecute = false });
-            return started is not null;
+            if (OperatingSystem.IsWindows())
+            {
+                // A browser already running takes the page, and then no process is returned; a failure throws.
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(page.AbsoluteUri) { UseShellExecute = true })?.Dispose();
+                return true;
+            }
+
+            using System.Diagnostics.Process? started = System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo("sh", ["-c", "exec xdg-open \"$1\" </dev/null >/dev/null 2>&1", "sh", page.AbsoluteUri])
+                {
+                    UseShellExecute = false
+                });
+
+            // sh always starts; xdg-open failing (missing, or no browser to hand the page to) shows only in its exit code.
+            // One still running after a few seconds is taken to have opened a browser it now waits on.
+            return started is not null && (!started.WaitForExit(3000) || started.ExitCode == 0);
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException)
         {

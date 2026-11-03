@@ -314,12 +314,42 @@ public class ArchiveV2Tests
         }
     }
 
+    /// <summary>
+    ///     A manifest with a member this version does not know is refused as a later format when it names one, so it
+    ///     says a newer version may read it, and as unreadable when it names this format.
+    /// </summary>
+    [Test]
+    public async Task AManifestWithAnUnknownMember_IsALaterFormat_OnlyWhenItNamesOne()
+    {
+        using TempDir temp = new();
+        string zip = Write(temp);
+
+        static Func<byte[], byte[]?> Change(string format) => bytes =>
+        {
+            System.Text.Json.Nodes.JsonObject manifest = System.Text.Json.Nodes.JsonNode.Parse(bytes)!.AsObject();
+            manifest["format"] = format;
+            manifest["laterMember"] = 1;
+            return Encoding.UTF8.GetBytes(manifest.ToJsonString());
+        };
+
+        ArchiveRejectedException later = Assert.Throws<ArchiveRejectedException>(() =>
+            ArchiveReader.Open(Rewrite(zip, temp, ArchiveFormat.ManifestEntry, Change("acb/3")), AnyPlatform));
+        ArchiveRejectedException same = Assert.Throws<ArchiveRejectedException>(() =>
+            ArchiveReader.Open(Rewrite(zip, temp, ArchiveFormat.ManifestEntry, Change(ArchiveFormat.Format)), AnyPlatform));
+
+        await Assert.That(later.MayBeNewer).IsTrue();
+        await Assert.That(later.Message).Contains("format 'acb/3'");
+        await Assert.That(same.MayBeNewer).IsFalse();
+        await Assert.That(same.Message).Contains("cannot be read");
+    }
+
     internal static readonly ArchiveReadOptions AnyPlatform = new() { RequirePlatform = null };
 
     private static async Task Refused(string zip, string expected) =>
         await Assert.That(() => ArchiveReader.Open(zip, AnyPlatform)).Throws<ArchiveRejectedException>().WithMessageContaining(expected);
 
-    internal static string Write(TempDir temp, string? zip = null, SealKey? seal = null, IIdentitySigner? identity = null)
+    internal static string Write(TempDir temp, string? zip = null, SealKey? seal = null, IIdentitySigner? identity = null, Func<string, bool>? otherSigner = null,
+        string? account = "69413322")
     {
         string staging = temp.Sub("staging");
         if (!Directory.Exists(staging))
@@ -331,9 +361,9 @@ public class ArchiveV2Tests
         }
 
         zip ??= temp.Sub("backup.zip");
-        ArchiveContent content = new(Platforms.WindowsX64, new ArchiveTool("Advanced Config Backup", "test"), "69413322",
+        ArchiveContent content = new(Platforms.WindowsX64, new ArchiveTool("Advanced Config Backup", "test"), account,
             [new ArchiveSection("cs2", "Settings for account 69413322's CS2 'slot 0'")], "Advanced Config Backup\n");
-        ArchiveWriter.Write(staging, zip, content, Created, CancellationToken.None, seal, identity: identity);
+        ArchiveWriter.Write(staging, zip, content, Created, CancellationToken.None, seal, identity: identity, otherSigner: otherSigner);
         return zip;
     }
 

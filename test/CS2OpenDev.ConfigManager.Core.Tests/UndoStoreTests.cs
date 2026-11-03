@@ -454,6 +454,6 @@ public class UndoStoreTests
     private static CS2OpenDev.ConfigManager.Archive.VerifiedArchive Signed(string? signer) => new(
         new CS2OpenDev.ConfigManager.Archive.ArchiveManifest(CS2OpenDev.ConfigManager.Archive.ArchiveFormat.Format,
             CS2OpenDev.ConfigManager.Archive.Platforms.WindowsX64, DateTimeOffset.UnixEpoch,
-            new CS2OpenDev.ConfigManager.Archive.ArchiveTool("test", "1"), null, [], []),
+            new CS2OpenDev.ConfigManager.Archive.ArchiveTool("test", "1"), [], []),
         CS2OpenDev.ConfigManager.Archive.TrustLevel.Identity, "00", [], signer);
 }

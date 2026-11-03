@@ -39,6 +39,38 @@ public class SelfContainedTests
         await Assert.That(json.Errors).Contains("the same program as this acb");
     }
 
+    /// <summary>
+    ///     Whoever made a signed backup chose the restorer it carries, and with it which stolen keys that restorer knows
+    ///     of. So when the acb checking it is that restorer, its verdict says to check again with an acb installed on
+    ///     its own; another acb's verdict does not.
+    /// </summary>
+    [Test]
+    public async Task ASignedBackup_CheckedByTheRestorerItCarries_SaysToCheckAgainWithAnInstalledAcb()
+    {
+        using TestHost host = new() { IdentityService = IdentityCommandTests.Service, Interactive = true };
+        using FakeSteam source = new();
+        host.Executable = Program(host.Temp, "bin", "acb build 1");
+        string zip = host.Temp.Sub("signed.zip");
+        host.Answers.Enqueue("y");
+        await Assert.That(host.Run("backup", "-o", zip, "--only", "cs2game", "--steam-path", source.Root, "--self-contained", "--sign"))
+            .IsEqualTo(ExitCodes.Done).Because(host.All);
+
+        using TestHost carried = new() { Executable = host.Executable };
+        await Assert.That(carried.Run("verify", zip)).IsEqualTo(ExitCodes.Done).Because(carried.All);
+        await Assert.That(carried.All).Contains(Archives.CarriedRestorer);
+        using FakeSteam target = new();
+        RestoreFlow flow = new(carried.Host()) { ArchivePath = zip, SteamPath = target.Root };
+        await Assert.That(flow.Check()).IsTrue();
+        await Assert.That(flow.CheckedByCarriedRestorer).IsTrue();
+        await Assert.That(string.Join('\n', flow.CheckLines())).Contains(Archives.CarriedRestorer);
+
+        using TestHost installed = new();
+        installed.Executable = Program(installed.Temp, "bin", "acb build 2");
+        await Assert.That(installed.Run("verify", zip)).IsEqualTo(ExitCodes.Done).Because(installed.All);
+        await Assert.That(installed.All).Contains("checked against the keys revoked up to");
+        await Assert.That(installed.All).DoesNotContain(Archives.CarriedRestorer);
+    }
+
     [Test]
     public async Task Verify_ABackupCarryingAnotherBuild_SaysToCheckItBeforeRunningIt()
     {

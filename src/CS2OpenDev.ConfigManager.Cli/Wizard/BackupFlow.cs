@@ -49,7 +49,7 @@ internal sealed class BackupFlow
     public bool Sign { get; set; }
 
     /// <summary>Why the backup cannot be signed here (no service set, or no root keys in this acb); null when it can.</summary>
-    public string? SignProblem => InfoCommands.SignProblem(_host.IdentityService);
+    public string? SignProblem => InfoCommands.SignProblem(_host.IdentityService, _host.BrowserSignInProblem);
 
     /// <summary>Carries this acb in the backup as its restorer.</summary>
     public bool SelfContained { get; set; }
@@ -154,6 +154,12 @@ internal sealed class BackupFlow
             return "The backup cannot be signed: " + unsigned;
         }
 
+        // The screen writes no signed backup whose settings name no account (OtherSigner is null), so say it before signing in.
+        if (Sign && OtherSigner is null && !Chosen.Contains(Sections.Cs2) && !Chosen.Contains(Sections.Launch))
+        {
+            return "A signed backup needs the CS2 settings or the launch options, which name the Steam account it is signed for.";
+        }
+
         return SelfContained && SelfContainedProblem is { } cannot ? "The backup cannot carry this acb: " + cannot + "." : null;
     }
 
@@ -168,11 +174,20 @@ internal sealed class BackupFlow
 
     public bool Saved { get; private set; }
 
+    /// <summary>
+    ///     Asked, with what to say, when the service signs for another account than the one whose settings these are;
+    ///     null, as on the screens, writes no such backup and says why.
+    /// </summary>
+    public Func<string, bool>? OtherSigner { get; init; }
+
     /// <summary>The Steam account a signed backup is signed for, once saved.</summary>
     public string? Signer { get; private set; }
 
-    /// <summary>Captures the chosen parts and writes the backup, as <c>acb backup</c> does.</summary>
-    public int Save()
+    /// <summary>
+    ///     Captures the chosen parts and writes the backup, as <c>acb backup</c> does. Signing in for a signed backup
+    ///     says where to go on <paramref name="words" />, and stops when <paramref name="cancel" /> is cancelled.
+    /// </summary>
+    public int Save(TextWriter? words = null, CancellationToken cancel = default)
     {
         if (Saved)
         {
@@ -194,9 +209,10 @@ internal sealed class BackupFlow
             }
 
             RunReport report = BackupBuilder.Create(Options(Chosen), Path.GetFullPath(OutputPath),
-                new ArchiveTool("Advanced Config Backup (acb)", Archives.Version()), _host.Now(), CancellationToken.None,
+                new ArchiveTool("Advanced Config Backup (acb)", Archives.Version()), _host.Now(), cancel,
                 Passphrase is null ? null : SealKey.Create(Passphrase), restorer,
-                Sign ? _host.IdentitySigner(_host.IdentityService!, TextWriter.Null) : null);
+                Sign ? _host.IdentitySigner(_host.IdentityService!, words ?? TextWriter.Null, cancel) : null,
+                OtherSigner);
             Results.AddRange(report.Results);
             Saved = BackupBuilder.HoldsAnything(report);
             ExitCode = !Saved ? ExitCodes.Refused : report.Count(Outcomes.Failed) > 0 ? ExitCodes.PartsLeft : ExitCodes.Done;
@@ -205,6 +221,14 @@ internal sealed class BackupFlow
             {
                 Signer = ArchiveReader.Open(Path.GetFullPath(OutputPath), new ArchiveReadOptions { RequirePlatform = null }).Signer;
             }
+        }
+        catch (IdentityServiceException ex)
+        {
+            SaveProblem = ex.Message + " No backup was written; save it unsigned, or sealed, to have one now.";
+        }
+        catch (OperationCanceledException) when (cancel.IsCancellationRequested)
+        {
+            SaveProblem = "The backup was stopped, so none was written.";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -231,7 +255,7 @@ internal sealed class BackupFlow
 
         lines.Add("Saved " + Path.GetFullPath(OutputPath));
         lines.Add(Signer is not null
-            ? $"Signed for Steam account {Signer}: anyone can check offline that this account made it and that it is unchanged since."
+            ? $"Signed for Steam account (SteamID64 {Signer}): anyone can check offline that this account made it and that it is unchanged since."
             : Passphrase is null
                 ? "Unsealed: anyone holding it can read it, and could edit it."
                 : "Sealed: acb asks for the passphrase before it checks or restores it. Without the passphrase it cannot be opened.");

@@ -322,8 +322,10 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
         VerifiedArchive archive;
         try
         {
+            // Checking is not restoring: a backup signed with a revoked key is shown at the hash level, with the warning below.
             archive = ArchiveReader.Open(zipPath, new ArchiveReadOptions
             {
+                AcceptRevoked = true,
                 RequirePlatform = null,
                 Passphrase = string.IsNullOrEmpty(passphrase) ? null : passphrase
             });
@@ -331,6 +333,10 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
         catch (SealNotOpenedException ex) when (!ex.Wrong)
         {
             return $"{Path.GetFileName(zipPath)} is sealed with a passphrase. Type it in the passphrase box and check it again.";
+        }
+        catch (ArchiveRejectedException ex) when (ex.MayBeNewer)
+        {
+            return $"This version of the plugin cannot check {Path.GetFileName(zipPath)}, so do not restore it yet: {ex.Message}";
         }
         catch (ArchiveRejectedException ex)
         {
@@ -345,12 +351,31 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
 
         ArchiveManifest manifest = archive.Manifest;
         bool isUnsigned = archive.Level == TrustLevel.Hash;
-        results.Add("Trust level: " + ArchiveReader.Name(archive.Level) + archive.Level switch
+        if (archive.RevokedSigner is { } revoked)
         {
-            TrustLevel.Hash => " (unsigned: anyone could have edited this; it shows only that the files match the manifest)",
-            TrustLevel.Seal => " (the passphrase opens its seal; anyone who knows or guesses the passphrase could have made it)",
-            _ => ""
-        });
+            results.Add("Trust level: hash (its identity signature does not count, as its signing key was revoked)");
+            results.Add("Warning: " + revoked.RevokedWarning());
+        }
+        else
+        {
+            results.Add("Trust level: " + ArchiveReader.Name(archive.Level) + archive.Level switch
+            {
+                TrustLevel.Hash => " (unsigned: anyone could have edited this; it shows only that the files match the manifest)",
+                TrustLevel.Seal => " (the passphrase opens its seal; anyone who knows or guesses the passphrase could have made it)",
+                _ => archive.IdentitySigner is { } signer ? " (signed by " + signer.Describe() + ")" : ""
+            });
+        }
+
+        if (archive.IdentitySigner?.OtherAccount(manifest.SteamAccount) is { } other)
+        {
+            results.Add("Note: " + other);
+        }
+
+        if (archive.IdentitySigner is { } checkedSigner)
+        {
+            results.Add("Note: " + checkedSigner.Revocations());
+        }
+
         results.Add(string.Create(CultureInfo.CurrentCulture,
             $"Made {manifest.Created.ToLocalTime():yyyy-MM-dd HH:mm} by {manifest.Tool.Name} {manifest.Tool.Version}, for {manifest.Platform}"));
         foreach (ArchiveSection section in manifest.Sections)
@@ -358,11 +383,17 @@ public sealed partial class ConfigBackupPageViewModel : ObservableObject
             results.Add(section.Label + (section.Notes is { Count: > 0 } notes ? " (" + string.Join("; ", notes) + ")" : ""));
         }
 
+        if (archive.RevokedSigner is not null)
+        {
+            return $"{Path.GetFileName(zipPath)}: {manifest.Entries.Count} files, each matching its manifest, so it is unchanged since it was made. "
+                   + "Its signing key was revoked, so who made it is not proven; acb asks before restoring it.";
+        }
+
         return archive.Level switch
         {
             TrustLevel.Hash => $"{Path.GetFileName(zipPath)}: {manifest.Entries.Count} files, each matching its manifest, so nothing was damaged or changed by accident. It is unsigned, so anyone could have edited it.",
             TrustLevel.Seal => $"{Path.GetFileName(zipPath)} opens with this passphrase, so it was made by someone who knows it and is unchanged since: {manifest.Entries.Count} files, each matching its manifest.",
-            _ => $"{Path.GetFileName(zipPath)} is unchanged since it was made: {manifest.Entries.Count} files, each matching its manifest."
+            _ => $"{Path.GetFileName(zipPath)} was signed for Steam account (SteamID64 {archive.Signer}) and is unchanged since: {manifest.Entries.Count} files, each matching its manifest. Whoever can sign in as that account could have made it."
         };
     }
 

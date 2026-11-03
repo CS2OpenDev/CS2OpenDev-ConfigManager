@@ -19,15 +19,17 @@ public static class BackupBuilder
     ///     record lists, so the copies of a part that failed never reach the archive. No archive is written when no
     ///     part was captured; the report says why. With <paramref name="seal" /> the archive is sealed with it, and
     ///     with <paramref name="restorer" /> it carries those bytes as its restorer (self-contained). With
-    ///     <paramref name="identity" /> it is signed for a Steam account instead of sealed.
+    ///     <paramref name="identity" /> it is signed for a Steam account instead of sealed, and
+    ///     <paramref name="otherSigner" /> is asked before a signature for another account than the settings', or for
+    ///     settings that name no account, is written.
     /// </summary>
     public static RunReport Create(CaptureOptions options, string zipPath, ArchiveTool tool, DateTimeOffset now, CancellationToken ct,
-        SealKey? seal = null, byte[]? restorer = null, IIdentitySigner? identity = null)
+        SealKey? seal = null, byte[]? restorer = null, IIdentitySigner? identity = null, Func<string, bool>? otherSigner = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         string platform = ArchiveFormat.CurrentPlatform
                           ?? throw new PlatformNotSupportedException("Backups are made on Windows x64 and Linux x64 only.");
-        string work = Path.Combine(Path.GetTempPath(), "acb-" + Guid.NewGuid().ToString("N"));
+        string work = WorkFolder();
         string capture = Path.Combine(work, "capture");
         string pack = Path.Combine(work, "pack");
         options.Cancellation = ct;
@@ -65,7 +67,7 @@ public static class BackupBuilder
                 .Select(r => new ArchiveSection(r.Section, Sections.Label(r.Section), string.IsNullOrEmpty(r.Detail) ? null : [r.Detail]))];
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(zipPath))!);
             ArchiveWriter.Write(pack, zipPath, new ArchiveContent(platform, tool, account, sections, Readme(platform, seal is not null, restorer is not null)), now, ct,
-                seal, restorer, identity);
+                seal, restorer, identity, otherSigner);
             return report;
         }
         finally
@@ -81,7 +83,7 @@ public static class BackupBuilder
     public static RunReport Preview(CaptureOptions options, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(options);
-        string work = Path.Combine(Path.GetTempPath(), "acb-" + Guid.NewGuid().ToString("N"));
+        string work = WorkFolder();
         options.Cancellation = ct;
         try
         {
@@ -151,6 +153,25 @@ public static class BackupBuilder
          backup that opens was made by someone who knew it and is unchanged since. Anyone holding this file can
          try passphrases, though, and a guessed one could seal a changed copy, so keep the passphrase long.
          """;
+
+    /// <summary>
+    ///     A new temp folder for the copies a backup is made from. On Linux temp is shared, so only its owner may open
+    ///     it: the copies hold the settings, and with --gsi the game state integration files' auth tokens.
+    /// </summary>
+    private static string WorkFolder()
+    {
+        string work = Path.Combine(Path.GetTempPath(), "acb-" + Guid.NewGuid().ToString("N"));
+        if (OperatingSystem.IsWindows())
+        {
+            Directory.CreateDirectory(work);
+        }
+        else
+        {
+            Directory.CreateDirectory(work, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        return work;
+    }
 
     private static void DeleteQuietly(string dir)
     {

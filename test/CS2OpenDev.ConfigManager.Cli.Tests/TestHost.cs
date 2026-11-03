@@ -109,8 +109,20 @@ internal sealed class TestHost : IDisposable
     /// <summary>Signs as the service would, with the test keys; every service address gets this one.</summary>
     public TestIdentity.Signer IdentitySigner { get; set; } = new();
 
+    /// <summary>Makes the signer instead of <see cref="IdentitySigner" />: the real client against a stand-in service.</summary>
+    public Func<string, TextWriter, CancellationToken, IIdentitySigner>? Signer { get; set; }
+
+    /// <summary>Why a browser sign-in cannot come back here, as the real host works it out from the environment; null for none.</summary>
+    public string? BrowserSignInProblem { get; set; }
+
+    /// <summary>What acb does on Ctrl+C while it catches it; null when it does not. Calling it presses Ctrl+C.</summary>
+    public Action? Interrupt { get; private set; }
+
     /// <summary>The program file acb takes for its own (what --self-contained carries); null for none.</summary>
     public string? Executable { get; set; }
+
+    /// <summary>acb runs as an administrator, for overriding a policy's refusal of a revoked signature.</summary>
+    public bool Administrator { get; set; }
 
     /// <summary>Stands in for the wizard when acb is run with no command at a terminal.</summary>
     public Func<AcbHost, int>? Wizard { get; set; }
@@ -134,6 +146,7 @@ internal sealed class TestHost : IDisposable
                 return Secrets.Count > 0 ? Secrets.Dequeue() : null;
             },
             Interactive = Interactive,
+            IsAdministrator = () => Administrator,
             Platform = ArchiveFormat.CurrentPlatform,
             UserStoreRoot = UserStore,
             MachineStoreRoot = MachineStore,
@@ -168,7 +181,13 @@ internal sealed class TestHost : IDisposable
             Wizard = Wizard,
             Executable = Executable,
             IdentityService = IdentityService,
-            IdentitySigner = (_, _) => IdentitySigner,
+            IdentitySigner = Signer ?? ((_, _, _) => IdentitySigner),
+            BrowserSignInProblem = BrowserSignInProblem,
+            OnInterrupt = interrupted =>
+            {
+                Interrupt = interrupted;
+                return new Released(() => Interrupt = null);
+            },
             Machine = Machine
         };
     }
@@ -177,6 +196,11 @@ internal sealed class TestHost : IDisposable
     public IReadOnlyList<UndoRecord> Records() => new UndoStore(UserStore, isMachine: false).Records();
 
     public void Dispose() => Temp.Dispose();
+
+    private sealed class Released(Action release) : IDisposable
+    {
+        public void Dispose() => release();
+    }
 }
 
 /// <summary>Archives for the tests: captured from a fake Steam, or written by hand to say what a test needs.</summary>

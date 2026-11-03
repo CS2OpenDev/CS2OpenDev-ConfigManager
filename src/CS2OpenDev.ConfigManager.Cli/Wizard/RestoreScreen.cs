@@ -38,11 +38,15 @@ internal sealed class RestoreScreen : IDisposable
     /// <summary>Picks a file; null when the person cancels. A file dialog on screen, a stand-in in tests.</summary>
     public Func<string, string?> PickFile { get; set; }
 
+    /// <summary>Asks whether to use a backup whose signing key was revoked, saying why; a stand-in in tests.</summary>
+    public Func<string, bool> AskRevoked { get; set; }
+
     public RestoreScreen(RestoreFlow flow)
     {
         _flow = flow;
         AskPassphrase = again => Dialogs.Passphrase(Shell!.Window.App, again);
         PickFile = title => Dialogs.Open(Shell!.Window.App, title);
+        AskRevoked = why => Dialogs.YesNo(Shell!.Window.App, "Its signing key was revoked", why, "Use it anyway");
 
         View open = new() { CanFocus = true };
         _archive.Text = flow.ArchivePath;
@@ -128,10 +132,21 @@ internal sealed class RestoreScreen : IDisposable
             open = _flow.Check();
         }
 
+        if (!open && _flow.RevokedRefusal && _flow.RevokedAccepted != _flow.ArchivePath
+            && AskRevoked(_flow.Refusal + " Use it anyway, checked only as unchanged (the hash level)?"))
+        {
+            _flow.RevokedAccepted = _flow.ArchivePath;
+            open = _flow.Check();
+        }
+
         return open ? null : _flow.Refusal;
     }
 
-    private List<string> Summary()
+    /// <summary>
+    ///     The rail's summary of the backup: at the identity level the signer it checked, and the account whose
+    ///     settings these are only as the manifest says, with a warning when that is not the signer's.
+    /// </summary>
+    internal List<string> Summary()
     {
         if (_flow.Archive is not { } archive)
         {
@@ -141,12 +156,33 @@ internal sealed class RestoreScreen : IDisposable
         List<string> lines =
         [
             Output.Printable(Path.GetFileName(_flow.ArchivePath)),
-            archive.Level switch { TrustLevel.Hash => "unsigned (hash)", TrustLevel.Seal => "sealed", _ => "signed" },
+            archive.RevokedSigner is not null ? "revoked signature (hash)"
+                : archive.Level switch { TrustLevel.Hash => "unsigned (hash)", TrustLevel.Seal => "sealed", _ => "signed (identity)" },
             archive.Manifest.Created.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) + "Z",
         ];
+        if (archive.RevokedSigner is { } claimed)
+        {
+            lines.Add("Revoked: " + Output.Printable(claimed.RevokedWarning()));
+        }
+
+        if (archive.IdentitySigner is { } signer)
+        {
+            lines.Add("signed by " + signer.Describe());
+            if (signer.OtherAccount(archive.Manifest.SteamAccount) is { } other)
+            {
+                lines.Add("Note: " + Output.Printable(other));
+            }
+
+            lines.Add(signer.Revocations());
+            if (_flow.CheckedByCarriedRestorer)
+            {
+                lines.Add(Archives.CarriedRestorer);
+            }
+        }
+
         if (archive.Manifest.SteamAccount is { } account)
         {
-            lines.Add("account " + Output.Printable(account));
+            lines.Add("settings of account " + Output.Printable(account));
         }
 
         if (archive.Restorer is not null)

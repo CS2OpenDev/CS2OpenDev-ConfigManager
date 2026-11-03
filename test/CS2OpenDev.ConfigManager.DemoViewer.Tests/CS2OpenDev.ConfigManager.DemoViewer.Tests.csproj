@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- The DemoViewer.NET plugin's packaging: the manifest the host reads and what it says. -->
+    <!-- The DemoViewer.NET plugin's packaging (the manifest the host reads and what it says) and its "Check a backup".
+         Identity backups are checked against this test run's own roots, which TestIdentity installs. -->
     <PropertyGroup>
         <OutputType>Exe</OutputType>
     </PropertyGroup>
@@ -10,7 +11,12 @@
     </ItemGroup>
 
     <ItemGroup>
+        <Compile Include="..\CS2OpenDev.ConfigManager.Core.Tests\TestIdentity.cs" Link="Shared\TestIdentity.cs"/>
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="..\..\plugin\CS2OpenDev.ConfigManager.DemoViewer\CS2OpenDev.ConfigManager.DemoViewer.csproj"/>
+        <ProjectReference Include="..\..\tools\CS2OpenDev.ConfigManager.IdentityIssuer\CS2OpenDev.ConfigManager.IdentityIssuer.csproj"/>
     </ItemGroup>
 
 </Project>

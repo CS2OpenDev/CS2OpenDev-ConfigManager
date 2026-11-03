@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace CS2OpenDev.ConfigManager.Archive;
 
@@ -29,4 +30,11 @@ public static class Dsse
     }
 
     public static string Sha256Hex(ReadOnlySpan<byte> data) => Convert.ToHexStringLower(SHA256.HashData(data));
+
+    /// <summary>An envelope as JSON, written as an archive writes it.</summary>
+    public static string ToJson(DsseEnvelope envelope) => JsonSerializer.Serialize(envelope, ArchiveJson.Strict.DsseEnvelope);
+
+    /// <summary>An envelope read as strictly as an archive's; throws <see cref="JsonException" /> for anything else.</summary>
+    public static DsseEnvelope FromJson(string json) =>
+        JsonSerializer.Deserialize(json, ArchiveJson.Strict.DsseEnvelope) ?? throw new JsonException("The envelope is empty.");
 }

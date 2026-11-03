@@ -7,6 +7,7 @@ namespace CS2OpenDev.ConfigManager.Tests;
 ///     The Linux NVIDIA part: the driver's application profiles read as the driver reads them, and restored as one
 ///     file of acb's own, so the player's own profile files are never edited.
 /// </summary>
+[NotInParallel("nvidia-driver-worker")]
 public class LinuxNvidiaTests
 {
     private const string PlayersRc = """

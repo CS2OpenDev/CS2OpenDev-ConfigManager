@@ -16,6 +16,7 @@
         <Project Path="plugin/CS2OpenDev.ConfigManager.DemoViewer/CS2OpenDev.ConfigManager.DemoViewer.csproj"/>
     </Folder>
     <Folder Name="/tools/">
+        <Project Path="tools/CS2OpenDev.ConfigManager.IdentityIssuer/CS2OpenDev.ConfigManager.IdentityIssuer.csproj"/>
         <Project Path="tools/CS2OpenDev.ConfigManager.IdentityKeys/CS2OpenDev.ConfigManager.IdentityKeys.csproj"/>
     </Folder>
     <Folder Name="/test/">
