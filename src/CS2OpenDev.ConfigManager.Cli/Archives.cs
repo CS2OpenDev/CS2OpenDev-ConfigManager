@@ -81,7 +81,7 @@ internal static class Archives
     {
         TrustLevel.Hash => "hash (unsigned: anyone could have edited this; it shows only that the files match the manifest)",
         TrustLevel.Seal => "seal (opened with its passphrase: made by someone who knows it, and unchanged since)",
-        _ => "identity (signed for a Steam account)"
+        _ => "identity (signed through the CS2OpenDev service for the Steam account below: made by that account, unchanged since)"
     };
 
     /// <summary>What every command shows first: which backup, at which level, made when and by what, and its restorer.</summary>
@@ -105,12 +105,47 @@ internal static class Archives
         }
 
         output.Line("Digest:   " + archive.ManifestSha256);
+        foreach (string line in SignerLines(archive))
+        {
+            output.Line(line);
+        }
+
+        if (archive.IdentitySigner is { } signer)
+        {
+            report.SignedBy = signer.SteamId64;
+            report.SignedAt = signer.SignedAt;
+        }
+
         if (RestorerLine(archive, host) is { } restorer)
         {
             report.RestorerSha256 = archive.Restorer!.Sha256;
             report.RestorerIsThisAcb = IsThisAcb(archive, host);
             output.Line(restorer);
         }
+    }
+
+    /// <summary>
+    ///     Who an identity-level backup is signed for, when, with which key; and when the settings are another
+    ///     account's, that too. Empty below the identity level.
+    /// </summary>
+    public static IReadOnlyList<string> SignerLines(VerifiedArchive archive)
+    {
+        if (archive.IdentitySigner is not { } signer)
+        {
+            return [];
+        }
+
+        List<string> lines =
+        [
+            string.Create(CultureInfo.InvariantCulture, $"Signed:   Steam account {signer.SteamId64}, {signer.SignedAt:yyyy-MM-dd HH:mm}Z (key {signer.Keyid[..16]})")
+        ];
+        string account = (long.Parse(signer.SteamId64, CultureInfo.InvariantCulture) - 76561197960265728L).ToString(CultureInfo.InvariantCulture);
+        if (archive.Manifest.SteamAccount is { } settings && settings != account)
+        {
+            lines.Add($"          the settings are account {Output.Printable(settings)}'s; account {account} signed them");
+        }
+
+        return lines;
     }
 
     /// <summary>

@@ -103,6 +103,12 @@ internal sealed class TestHost : IDisposable
     /// <summary>Everything acb wrote, for a failure message.</summary>
     public string All => _out + Environment.NewLine + _err;
 
+    /// <summary>The CS2OpenDev service acb is told to sign through; null for none.</summary>
+    public string? IdentityService { get; set; }
+
+    /// <summary>Signs as the service would, with the test keys; every service address gets this one.</summary>
+    public TestIdentity.Signer IdentitySigner { get; set; } = new();
+
     /// <summary>The program file acb takes for its own (what --self-contained carries); null for none.</summary>
     public string? Executable { get; set; }
 
@@ -161,6 +167,8 @@ internal sealed class TestHost : IDisposable
             DriverTimeoutMs = DriverTimeoutMs,
             Wizard = Wizard,
             Executable = Executable,
+            IdentityService = IdentityService,
+            IdentitySigner = (_, _) => IdentitySigner,
             Machine = Machine
         };
     }

@@ -59,6 +59,16 @@ internal sealed class AcbHost
     /// <summary>The registry, power plans and driver the engine reads and changes; null is this PC. Tests pass a fake.</summary>
     internal IMachine? Machine { get; init; }
 
+    /// <summary>The CS2OpenDev service that signs backups for a Steam account (ACB_IDENTITY_SERVICE); null when none is set.</summary>
+    public string? IdentityService { get; init; }
+
+    /// <summary>
+    ///     The signer for a service address, its sign-in words going to the writer given. The real one signs in
+    ///     through the browser; tests give a stand-in that signs with test keys.
+    /// </summary>
+    public Func<string, TextWriter, Archive.IIdentitySigner> IdentitySigner { get; init; } =
+        (service, words) => new ServiceSigner(service, new HttpClient { Timeout = TimeSpan.FromSeconds(30) }, OpenBrowser, words);
+
     /// <summary>This acb's own program file: what <c>backup --self-contained</c> carries, and what a carried restorer is compared with.</summary>
     public string? Executable { get; init; }
 
@@ -96,6 +106,7 @@ internal sealed class AcbHost
         ConnectElevated = pipe => OperatingSystem.IsWindows() ? WindowsElevator.Connect(pipe) : null,
         Now = () => DateTimeOffset.Now,
         Executable = Environment.ProcessPath,
+        IdentityService = Environment.GetEnvironmentVariable("ACB_IDENTITY_SERVICE") is { Length: > 0 } service ? service : null,
         Wizard = CS2OpenDev.ConfigManager.Cli.Wizard.Tui.Run,
         EnsureMachineStore = (root, parent) =>
         {
@@ -127,11 +138,29 @@ internal sealed class AcbHost
         ConnectElevated = ConnectElevated,
         Now = Now,
         Executable = Executable,
+        IdentityService = IdentityService,
+        IdentitySigner = IdentitySigner,
         EnsureMachineStore = EnsureMachineStore,
         BeforeRollback = BeforeRollback,
         StartNvidia = StartNvidia,
         DriverTimeoutMs = DriverTimeoutMs
     };
+
+    /// <summary>Opens a web page in the person's browser; false when none could be started.</summary>
+    private static bool OpenBrowser(string url)
+    {
+        try
+        {
+            using System.Diagnostics.Process? started = OperatingSystem.IsWindows()
+                ? System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true })
+                : System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("xdg-open", [url]) { UseShellExecute = false });
+            return started is not null;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>Reads a line from the console without echoing it. Escape or Ctrl+C gives null, as an empty answer does.</summary>
     private static string? ReadHidden(string question)

@@ -46,7 +46,7 @@ internal static class InfoCommands
             TrustLevel.Hash => "Its files match its manifest, so nothing was damaged or changed by accident. It is unsigned: anyone could have edited it, the account named above included.",
             TrustLevel.Seal => "The passphrase opens its seal, so it was made by someone who knows the passphrase and is unchanged since. "
                                + "Anyone who knows or guesses the passphrase could have made it, the account named above included.",
-            _ => "Unchanged since it was made."
+            _ => $"It is signed through the CS2OpenDev service for Steam account {archive.Signer}, and unchanged since. Whoever can sign in as that account could have made it."
         };
         output.Note(archive.Manifest.Platform == host.Platform
             ? $"{state} acb restores it on this PC."
@@ -160,6 +160,24 @@ internal static class InfoCommands
         return passphrase;
     }
 
+    /// <summary>Why a backup cannot be signed for a Steam account here; null when it can.</summary>
+    internal static string? SignProblem(string? service)
+    {
+        if (service is null)
+        {
+            return "signing for a Steam account needs the CS2OpenDev service: give --identity-service <url>, or set ACB_IDENTITY_SERVICE.";
+        }
+
+        if (ServiceSigner.Problem(service) is { } bad)
+        {
+            return bad + ".";
+        }
+
+        return IdentityTrust.Current.Roots.Count == 0
+            ? "this acb carries no root keys for the identity level yet, so it could not check the signature the service returns."
+            : null;
+    }
+
     private static string Describe(KvNode node)
     {
         int values = 0;
@@ -185,7 +203,7 @@ internal static class InfoCommands
     /// <summary>Makes a v2 archive of this PC's settings, as the DemoViewer.NET plugin does. Read only, apart from the archive.</summary>
     public static int Backup(IReadOnlyList<string> args, AcbHost host)
     {
-        CommandLine line = CommandLine.Parse(args, "backup", ["gsi", "json", "seal", "self-contained"], ["output", "only", "account", "steam-path", "report", "passphrase-file"]);
+        CommandLine line = CommandLine.Parse(args, "backup", ["gsi", "json", "seal", "sign", "self-contained"], ["output", "only", "account", "steam-path", "report", "passphrase-file", "identity-service"]);
         line.NoPositionals();
         Output output = new(host, "backup", line.Flag("json"), line.Value("report"));
         string zip = line.Value("output") ?? throw new UsageException("acb backup needs -o <file> for the backup it writes.");
@@ -193,6 +211,11 @@ internal static class InfoCommands
         if (line.Value("passphrase-file") is not null && !line.Flag("seal"))
         {
             throw new UsageException("--passphrase-file seals the backup only with --seal.");
+        }
+
+        if (line.Flag("seal") && line.Flag("sign"))
+        {
+            throw new UsageException("A backup is sealed with a passphrase or signed for a Steam account, not both: give --seal or --sign.");
         }
 
         if (host.Platform is null)
@@ -221,6 +244,17 @@ internal static class InfoCommands
             {
                 return output.Refuse($"acb cannot read its own program file to carry it: {ex.Message}");
             }
+        }
+
+        IIdentitySigner? identity = null;
+        if (line.Flag("sign"))
+        {
+            if (SignProblem(line.Value("identity-service") ?? host.IdentityService) is { } cannot)
+            {
+                return output.Refuse(cannot);
+            }
+
+            identity = host.IdentitySigner((line.Value("identity-service") ?? host.IdentityService)!, host.Err);
         }
 
         SealKey? seal = null;
@@ -265,7 +299,7 @@ internal static class InfoCommands
         RunReport report;
         try
         {
-            report = BackupBuilder.Create(options, zip, new ArchiveTool("Advanced Config Backup (acb)", Archives.Version()), host.Now(), CancellationToken.None, seal, restorer);
+            report = BackupBuilder.Create(options, zip, new ArchiveTool("Advanced Config Backup (acb)", Archives.Version()), host.Now(), CancellationToken.None, seal, restorer, identity);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -285,11 +319,18 @@ internal static class InfoCommands
         }
 
         output.Report.Archive = Path.GetFullPath(zip);
-        output.Report.Level = ArchiveReader.Name(seal is null ? TrustLevel.Hash : TrustLevel.Seal);
+        output.Report.Level = ArchiveReader.Name(identity is not null ? TrustLevel.Identity : seal is null ? TrustLevel.Hash : TrustLevel.Seal);
         output.Note("Saved " + output.Report.Archive + (report.Count(Outcomes.Failed) > 0 ? ", without the parts that failed above." : "."));
         if (seal is not null)
         {
             output.Note("It is sealed: acb asks for the passphrase before it checks or restores it. Without the passphrase it cannot be opened.");
+        }
+
+        if (identity is not null && ArchiveReader.Open(zip, new ArchiveReadOptions { RequirePlatform = null }).IdentitySigner is { } signer)
+        {
+            output.Report.SignedBy = signer.SteamId64;
+            output.Report.SignedAt = signer.SignedAt;
+            output.Note($"It is signed for Steam account {signer.SteamId64}: anyone can check offline that this account made it and that it is unchanged since.");
         }
 
         if (restorer is not null)

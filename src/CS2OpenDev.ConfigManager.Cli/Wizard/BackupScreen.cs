@@ -21,8 +21,10 @@ internal sealed class BackupScreen : IDisposable
     private readonly Button _browse = new() { ShadowStyle = ShadowStyles.None, X = Pos.AnchorEnd(), Y = 1, Text = "Browse" };
     private readonly CheckBox _seal = new() { X = 0, Y = 4, Text = "Seal it with a passphrase" };
     private readonly Label _sealNote = Ui.Text("", Ui.Muted, x: 4, y: 5);
-    private readonly CheckBox _carry = new() { X = 0, Y = 7, Text = "Carry acb in it, for a PC with nothing installed" };
-    private readonly Label _carryNote = Ui.Text("", Ui.Muted, x: 4, y: 8);
+    private readonly CheckBox _sign = new() { X = 0, Y = 7, Text = "Sign it for my Steam account (signs you in with Steam in your browser)" };
+    private readonly Label _signNote = Ui.Text("", Ui.Muted, x: 4, y: 8);
+    private readonly CheckBox _carry = new() { X = 0, Y = 10, Text = "Carry acb in it, for a PC with nothing installed" };
+    private readonly Label _carryNote = Ui.Text("", Ui.Muted, x: 4, y: 11);
     private readonly TextPane _done = new();
     private bool _looked;
 
@@ -59,7 +61,8 @@ internal sealed class BackupScreen : IDisposable
             e.Handled = true;
         };
         _seal.ValueChanged += (_, _) => SealChanged();
-        save.Add(Ui.Text("Save as", Ui.Accent), _output, _browse, Ui.Text("How", Ui.Accent, y: 3), _seal, _sealNote, _carry, _carryNote);
+        _sign.ValueChanged += (_, _) => SignChanged();
+        save.Add(Ui.Text("Save as", Ui.Accent), _output, _browse, Ui.Text("How", Ui.Accent, y: 3), _seal, _sealNote, _sign, _signNote, _carry, _carryNote);
 
         Shell = new TaskShell("Back up",
         [
@@ -84,6 +87,11 @@ internal sealed class BackupScreen : IDisposable
         if (_flow.Passphrase is not null)
         {
             lines.Add("sealed");
+        }
+
+        if (_flow.Sign)
+        {
+            lines.Add("signed for my account");
         }
 
         if (_flow.SelfContained)
@@ -152,6 +160,12 @@ internal sealed class BackupScreen : IDisposable
         _output.Text = _flow.OutputPath;
         _seal.Value = _flow.Passphrase is null ? CheckState.UnChecked : CheckState.Checked;
         _sealNote.Text = SealText();
+        string? unsigned = _flow.SignProblem;
+        _sign.Enabled = unsigned is null;
+        _sign.Value = _flow.Sign && unsigned is null ? CheckState.Checked : CheckState.UnChecked;
+        _signNote.Text = unsigned is null
+            ? "Anyone can then check offline that your account made it. Only its digest is sent, never your settings."
+            : "Not here: " + unsigned;
         string? cannot = _flow.SelfContainedProblem;
         _carry.Enabled = cannot is null;
         _carry.Value = _flow.SelfContained && cannot is null ? CheckState.Checked : CheckState.UnChecked;
@@ -160,8 +174,24 @@ internal sealed class BackupScreen : IDisposable
             : "Not here: " + cannot + ".";
     }
 
+    private void SignChanged()
+    {
+        _flow.Sign = _sign.Value == CheckState.Checked;
+        if (_flow.Sign && _seal.Value == CheckState.Checked)
+        {
+            _seal.Value = CheckState.UnChecked;
+        }
+
+        Shell.Refresh();
+    }
+
     private void SealChanged()
     {
+        if (_seal.Value == CheckState.Checked && _sign.Value == CheckState.Checked)
+        {
+            _sign.Value = CheckState.UnChecked;
+        }
+
         if (_seal.Value == CheckState.Checked && _flow.Passphrase is null)
         {
             _flow.Passphrase = AskPassphrase();

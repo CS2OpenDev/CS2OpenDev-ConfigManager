@@ -40,6 +40,11 @@ internal sealed class CommandReport
 
     public string? SteamAccount { get; set; }
 
+    /// <summary>The SteamID64 an identity-level backup is signed for; null below that level.</summary>
+    public string? SignedBy { get; set; }
+
+    public DateTimeOffset? SignedAt { get; set; }
+
     /// <summary>The SHA-256 of the restorer a self-contained backup carries; null when it carries none.</summary>
     public string? RestorerSha256 { get; set; }
 

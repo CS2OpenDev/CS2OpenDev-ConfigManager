@@ -45,6 +45,12 @@ internal sealed class BackupFlow
     /// <summary>The passphrase to seal the backup with; null leaves it unsealed (hash level).</summary>
     public string? Passphrase { get; set; }
 
+    /// <summary>Signs the backup for the person's Steam account through the service, instead of sealing it.</summary>
+    public bool Sign { get; set; }
+
+    /// <summary>Why the backup cannot be signed here (no service set, or no root keys in this acb); null when it can.</summary>
+    public string? SignProblem => InfoCommands.SignProblem(_host.IdentityService);
+
     /// <summary>Carries this acb in the backup as its restorer.</summary>
     public bool SelfContained { get; set; }
 
@@ -138,6 +144,16 @@ internal sealed class BackupFlow
             return weak + ".";
         }
 
+        if (Sign && Passphrase is not null)
+        {
+            return "A backup is sealed or signed, not both.";
+        }
+
+        if (Sign && SignProblem is { } unsigned)
+        {
+            return "The backup cannot be signed: " + unsigned;
+        }
+
         return SelfContained && SelfContainedProblem is { } cannot ? "The backup cannot carry this acb: " + cannot + "." : null;
     }
 
@@ -151,6 +167,9 @@ internal sealed class BackupFlow
     public int ExitCode { get; private set; } = ExitCodes.Refused;
 
     public bool Saved { get; private set; }
+
+    /// <summary>The Steam account a signed backup is signed for, once saved.</summary>
+    public string? Signer { get; private set; }
 
     /// <summary>Captures the chosen parts and writes the backup, as <c>acb backup</c> does.</summary>
     public int Save()
@@ -176,11 +195,16 @@ internal sealed class BackupFlow
 
             RunReport report = BackupBuilder.Create(Options(Chosen), Path.GetFullPath(OutputPath),
                 new ArchiveTool("Advanced Config Backup (acb)", Archives.Version()), _host.Now(), CancellationToken.None,
-                Passphrase is null ? null : SealKey.Create(Passphrase), restorer);
+                Passphrase is null ? null : SealKey.Create(Passphrase), restorer,
+                Sign ? _host.IdentitySigner(_host.IdentityService!, TextWriter.Null) : null);
             Results.AddRange(report.Results);
             Saved = BackupBuilder.HoldsAnything(report);
             ExitCode = !Saved ? ExitCodes.Refused : report.Count(Outcomes.Failed) > 0 ? ExitCodes.PartsLeft : ExitCodes.Done;
             SaveProblem = Saved ? null : "Nothing was saved, so no backup was written.";
+            if (Sign && Saved)
+            {
+                Signer = ArchiveReader.Open(Path.GetFullPath(OutputPath), new ArchiveReadOptions { RequirePlatform = null }).Signer;
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -206,9 +230,11 @@ internal sealed class BackupFlow
         }
 
         lines.Add("Saved " + Path.GetFullPath(OutputPath));
-        lines.Add(Passphrase is null
-            ? "Unsealed: anyone holding it can read it, and could edit it."
-            : "Sealed: acb asks for the passphrase before it checks or restores it. Without the passphrase it cannot be opened.");
+        lines.Add(Signer is not null
+            ? $"Signed for Steam account {Signer}: anyone can check offline that this account made it and that it is unchanged since."
+            : Passphrase is null
+                ? "Unsealed: anyone holding it can read it, and could edit it."
+                : "Sealed: acb asks for the passphrase before it checks or restores it. Without the passphrase it cannot be opened.");
         if (SelfContained)
         {
             lines.Add("It carries this acb: unpack it beside the zip on the other PC and run restorer/" + ArchiveFormat.RestorerFileName(_host.Platform!) + ".");

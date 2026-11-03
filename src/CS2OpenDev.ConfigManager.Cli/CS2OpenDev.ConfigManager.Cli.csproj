@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- acb, the restorer: a wizard (acb alone) and verify, show, plan, restore, undo and backup, headless. Published Native AOT for win-x64
+    <!-- acb, the restorer: its screens (acb alone) and verify, show, plan, restore, undo and backup, headless. Published Native AOT for win-x64
          and linux-x64, one binary with no .NET install. It reads only v2 archives, through Core's ArchiveReader. -->
     <PropertyGroup>
         <OutputType>Exe</OutputType>
