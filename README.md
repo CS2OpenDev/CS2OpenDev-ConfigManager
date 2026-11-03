@@ -8,7 +8,7 @@ It is a standalone tool first. A first-party [DemoViewer.NET](https://github.com
 built from this repository, makes backups from inside the app.
 
 > Status: early development. The restorer `acb` checks, shows, plans, restores and undoes backups, and makes
-> them, headless or through a step-by-step restore wizard. See [docs/design.md](docs/design.md) for the design and
+> them, headless or on its own screens. See [docs/design.md](docs/design.md) for the design and
 > plan.
 
 ## What it saves
@@ -32,7 +32,7 @@ list of what is saved, what is left out on purpose, and why.
 ## Using acb
 
 ```
-acb                                      the wizard: restore step by step, or undo a restore
+acb                                      the screens: back up, restore, or put this PC back
 acb backup -o backup.zip                 save this PC's settings
 acb backup -o backup.zip --seal          the same, sealed with a passphrase (Enter alone makes six random words)
 acb verify backup.zip                    check it: its trust level, when it was made, that its files match
@@ -41,8 +41,9 @@ acb restore backup.zip                   restore it, recording what it replaces
 acb undo                                 put the PC back as it was
 ```
 
-`acb` with no command at a terminal starts the wizard, which shows each file a restore would change against
-this PC's copy and lets you untick parts and files. `acb help` lists every option.
+`acb` with no command at a terminal opens its screens: home says what it sees on this PC, and from there you
+back up, restore or put the PC back, step by step. Restoring shows each file a restore would change against
+this PC's copy and lets you untick parts and files; backing up shows which parts this PC has. `acb help` lists every option.
 
 Game state integration files (`gamestate_integration_*.cfg`) are restored only with `--gsi`, since they send
 live game data to the address they name.
@@ -88,7 +89,7 @@ gh attestation verify acb-win-x64.exe --repo <owner>/CS2OpenDev-ConfigManager
 
 ```
 src/CS2OpenDev.ConfigManager.Core/            capture and restore engine, rules, archive format, undo store
-src/CS2OpenDev.ConfigManager.Cli/             acb, the restorer and its wizard (Native AOT, win-x64 and linux-x64)
+src/CS2OpenDev.ConfigManager.Cli/             acb, the restorer, with its screens (Native AOT, win-x64 and linux-x64)
 plugin/CS2OpenDev.ConfigManager.DemoViewer/   the DemoViewer.NET plugin
 test/                                         TUnit suites
 docs/                                         design of record and reference

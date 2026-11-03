@@ -2,16 +2,12 @@ using CS2OpenDev.ConfigManager.Cli.Wizard;
 using CS2OpenDev.ConfigManager.Kit;
 using CS2OpenDev.ConfigManager.Restoring;
 using CS2OpenDev.ConfigManager.Tests;
-using Terminal.Gui.App;
-using Terminal.Gui.Drivers;
-using Terminal.Gui.Input;
-using Terminal.Gui.Testing;
 
 namespace CS2OpenDev.ConfigManager.Cli.Tests;
 
 /// <summary>
-///     The restore wizard: each step through its flow, which holds every decision, and the screen through
-///     Terminal.Gui's ANSI driver with injected keys. Restores go only into fake Steam folders, and only file sections.
+///     The restore screen's flow, which holds every decision; TuiTests drives the screen itself. Restores go only
+///     into fake Steam folders, and only file sections.
 /// </summary>
 public class WizardTests
 {
@@ -177,93 +173,16 @@ public class WizardTests
         using TestHost host = new() { Wizard = _ => 42 };
 
         await Assert.That(host.Run()).IsEqualTo(ExitCodes.Usage).Because("there is no terminal to draw on");
-        await Assert.That(host.Errors).Contains("needs a terminal");
+        await Assert.That(host.Errors).Contains("need a terminal");
 
         host.Interactive = true;
         await Assert.That(host.Run()).IsEqualTo(42);
     }
 
-    /// <summary>
-    ///     The screen, through Terminal.Gui's ANSI driver: each step shows its stage, Space unticks a part in Choose,
-    ///     and Restore applies only what stayed ticked.
-    /// </summary>
-    [Test]
-    [NotInParallel("terminal")]
-    public async Task TheScreen_WalksEachStep_AndRestoresWhatStayedTicked()
-    {
-        // On Linux Terminal.Gui's driver waits on the terminal it starts in, so without one it would block for good;
-        // CI and the Linux runs start this suite under script(1), which gives it one.
-        if (!OperatingSystem.IsWindows() && (Console.IsInputRedirected || Console.IsOutputRedirected))
-        {
-            Skip.Test("on Linux the screen needs a terminal; run the suite under script(1)");
-            return;
-        }
-
-        (TestHost host, FakeSteam source, FakeSteam target, string zip) = Setup();
-        using (host)
-        using (source)
-        using (target)
-        {
-            RestoreFlow flow = new(host.Host()) { ArchivePath = zip, SteamPath = target.Root };
-            using IApplication app = Application.Create();
-            app.Init(DriverRegistry.Names.ANSI);
-            app.Driver!.SetScreenSize(120, 40);
-            using RestoreWizard wizard = new(flow);
-            SessionToken? token = app.Begin(wizard.Wizard);
-            try
-            {
-                string Screen()
-                {
-                    app.LayoutAndDraw(true);
-                    return app.Driver!.ToString() ?? "";
-                }
-
-                await Assert.That(Screen()).Contains("Backup file (.zip):");
-
-                await Assert.That(wizard.Wizard.GoNext()).IsTrue();
-                await Assert.That(Screen()).Contains("Level:    hash");
-
-                await Assert.That(wizard.Wizard.GoNext()).IsTrue();
-                await Assert.That(Screen()).Contains("changed  autoexec.cfg");
-
-                await Assert.That(wizard.Wizard.GoNext()).IsTrue();
-                string choose = Screen();
-                await Assert.That(choose).Contains("Space ticks or unticks");
-                await Assert.That(choose).Contains(Sections.Label(Sections.Launch));
-
-                // The list starts on its first row, the CS2 settings part; Space unticks it.
-                wizard.Steps[3].SubViews.OfType<Terminal.Gui.Views.ListView>().Single().SetFocus();
-                app.InjectKey(Key.Space);
-                await Assert.That(wizard.Wizard.GoNext()).IsTrue();
-                await Assert.That(Screen()).Contains("Nothing stands in the way.");
-                await Assert.That(flow.IsChosen(Sections.Cs2)).IsFalse();
-
-                await Assert.That(wizard.Wizard.GoNext()).IsTrue();
-                await Assert.That(Screen()).Contains("Pressing Restore applies this:");
-
-                await Assert.That(wizard.Wizard.GoNext()).IsTrue();
-                await Assert.That(Screen()).Contains("To put this PC back as it was, run: acb undo");
-                await Assert.That(flow.ExitCode).IsEqualTo(ExitCodes.Done);
-                await Assert.That(wizard.Wizard.GoBack()).IsFalse().Because("once applied, the wizard stays on Done");
-            }
-            finally
-            {
-                if (token is not null)
-                {
-                    app.End(token);
-                }
-            }
-
-            await Assert.That(target.Read(FakeSteam.Cfg("autoexec.cfg"))).Contains("from the backup");
-            await Assert.That(flow.Results.Exists(r => r.Section == Sections.Cs2)).IsFalse().Because("the CS2 settings part was unticked");
-            await Assert.That(SteamInstall.Locate(target.Root)!.ReadLaunchOptions(FakeSteam.AccountId)).IsEqualTo("-novid -freq 360");
-        }
-    }
-
     [Test]
     public async Task Wrap_KeepsIndent_AndBreaksAtSpaces()
     {
-        string[] lines = [.. RestoreWizard.Wrap(["  one two three four five"], 12)];
+        string[] lines = [.. Ui.Wrap(["  one two three four five"], 12)];
 
         await Assert.That(lines).IsEquivalentTo(["  one two", "    three", "    four", "    five"]);
     }

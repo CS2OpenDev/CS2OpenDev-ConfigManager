@@ -39,7 +39,7 @@ v2 separates the two:
 
 ```
 src/CS2OpenDev.ConfigManager.Core/          capture, restore engine, policy, archive v2, verification
-src/CS2OpenDev.ConfigManager.Cli/           `acb`: TUI wizard and headless commands (Native AOT)
+src/CS2OpenDev.ConfigManager.Cli/           `acb`: its screens (TUI) and headless commands (Native AOT)
 plugin/CS2OpenDev.ConfigManager.DemoViewer/ the DemoViewer.NET plugin: the Settings page that makes backups
 test/<project>.Tests/                       one TUnit project per component
 ```
@@ -189,7 +189,7 @@ In detail:
   archive cannot set how much memory or time a check spends, or weaken the settings to make guessing cheaper.
 - A wrong passphrase and an archive changed after sealing look the same, and are refused with one message. `acb`
   asks at the terminal (hidden), again after a wrong passphrase, three tries in all; `--passphrase-file` is read
-  once. Without either the refusal says how to give one. The wizard takes it on Open.
+  once. Without either the refusal says how to give one. The screens ask for it in a box when a backup turns out to be sealed.
 - The administrator's run is handed the 32-byte key over its pipe beside the backup's bytes, never the
   passphrase, and asks nobody. The key opens that archive only, as its salt is the archive's own.
 - Anyone can strip a seal and rewrite the statement at `hash`: such a backup reads as `hash`, and a policy whose
@@ -273,7 +273,7 @@ record's folder. The bytes it checks against `capture.vdf` are the bytes it writ
 ### Commands
 
 ```
-acb                                  wizard (TUI)
+acb                                  the screens (TUI): back up, restore, put this PC back
 acb verify  <archive> [--policy f]   check only; prints level, signer, sections, entries
 acb show    <archive> [--section s]  list or print captured files and values
 acb plan    <archive> [options]      what a restore would change, as text or --json
@@ -331,42 +331,51 @@ these are reported as unknown, never as left or refused); `64` usage.
 `1` holds for the whole run: an administrator's run that refuses after the player's sections changed the PC
 leaves its sections, and the run exits `2`.
 
-### The wizard
+### The screens
 
-Built with [Terminal.Gui](https://github.com/gui-cs/Terminal.Gui) 2.5, which publishes under Native AOT on
-`win-x64` and `linux-x64` with no trim warnings.
+`acb` with no command at a terminal opens its screens, built with [Terminal.Gui](https://github.com/gui-cs/Terminal.Gui)
+2.5, which publishes under Native AOT on `win-x64` and `linux-x64` with no trim warnings.
 
-1. **Open**: pick the archive, and optionally an organiser's policy and the Steam folder.
-2. **Check**: level, signer (Steam ID and name when known), creation date, platform, tool version. A failed
-   check stops here and names what failed.
-3. **Review**: each section with what a restore would do there now, and each file it would write, marked new
-   here, different here or already the same; picking a changed file shows its lines against the backup's (for
-   `cs2_video.txt`, the lines naming this PC's GPU and monitor keep this PC's values). Settings sections (launch
-   options, hotkeys, registry values, power plan, NVIDIA settings, vibrance) show a table of each setting the
-   restore would change: its value here and the value it gets. The engine's preview records the table as it
-   compares, on the driver's worker where the driver is involved, so the wizard reads nothing itself.
-4. **Choose**: tick sections and files. A `.vcfg` and its `_lastclouded` twin are one choice, and game state
-   integration files are a choice of their own, unticked. Choosing only narrows: the session reopens with the
-   choices, so a section the rules leave is never offered.
-5. **Pre-flight**: CS2 or Steam running (with "Check again"), administrator needed (with "Ask Windows" where
-   Windows can ask), targets that cannot be written, parts an administrator's `acb` leaves, and the account
-   question when the backup's account has not signed in here (default: leave those parts).
-6. **Apply**: the restore `acb restore` runs, through the same code; each part's outcome shows when it ends.
-7. **Done**: what changed, what was left and why, how to undo. The wizard does not go back from here.
+**Home** says what `acb` sees on this PC (the Steam folder, the accounts with CS2 settings and which signed in
+last, whether CS2 or Steam is running, how many restores can be put back) and offers the three tasks: back up
+this PC, restore a backup, put this PC back. Reading it changes nothing.
 
-The wizard is a view over `Restoring/RestoreSession`, the type `plan`, `restore`, `restore --plan` and the
-administrator's run take: every decision is the session's, and the wizard words it, escaping archive text as
-the commands print it. Its steps are tested through their flow (`Cli/Wizard/RestoreFlow`) and on screen through
-Terminal.Gui's ANSI driver with injected keys. On Linux the driver needs a terminal that reports a size, so the
-suite runs under `script(1)` with one set by `stty`.
+Each task runs on one **task screen**: its steps down the left, with the steps done ticked and the current one
+marked, and under them a short summary of what is picked (the backup, its level and account; the parts to
+save). The step's body is on the right, with Back and Next under it and anything that stops Next said above
+them, and the keys along the bottom. Esc goes back a step, and from the first step home; Ctrl+Q quits. Once a
+task has changed the PC or written a file there is no going back past that step. Files are picked in a file
+dialog or typed, and a passphrase is asked for in a box only when it is needed.
 
-The undo wizard has the same shape, and is reached from Open ("Undo a restore instead"): **Records** lists the
-player's records newest first (one that cannot be read can be set aside there), **Review** dry-runs the undo and
-shows, per record and part, what it would put back, each file as left by the restore, changed since, added by
-the restore, or already back, with this PC's file against what undo puts back; **Choose** ticks records and parts
-(an unticked record still holds back older records' same parts); **Pre-flight**, **Apply** ("Put back") and
-**Done** follow. Applying runs `acb undo` itself, so the hold-back rule, the administrator's store and its prompt
-are the command's.
+- **Back up**: **What** lists every part, ticked when this PC has it (found by capturing into a temp folder that
+  is then deleted), with what it would save, and unticked with the reason when it does not; game state
+  integration files are a choice of their own, and the account when several have CS2 settings. **Save** picks
+  the file (default: Documents, named by date and time), sealing with a passphrase (typed twice, or six random
+  words shown once), and carrying `acb` in the backup when this is a published `acb`. **Done** says what was
+  saved and how.
+- **Restore**: **Backup** picks the archive, and optionally an organiser's policy and the Steam folder; a sealed
+  one asks for its passphrase (three tries). **Choose** is one list of parts and files, each with what a restore
+  would do (new here, changed here, already the same, or the settings it would change), ticked to restore; the
+  part or file selected shows below it, a file's lines against the backup's (for `cs2_video.txt`, the lines
+  naming this PC's GPU and monitor keep this PC's values) and a settings part's table of each value here and
+  the value it gets. A `.vcfg` and its `_lastclouded` twin are one choice, and game state integration files are
+  a choice of their own, unticked. Choosing only narrows: the session reopens with the choices, so a part the
+  rules leave is never offered. **Ready** says what stands in the way (CS2 or Steam running, with "Check again";
+  an administrator needed, with "Ask Windows" where Windows can ask; targets that cannot be written; parts an
+  administrator's `acb` leaves; the account question when the backup's account has not signed in here) and
+  what Restore will apply. **Done** says what changed, what was left and why, and how to undo.
+- **Put this PC back**: **Records** lists the player's records newest first (one that cannot be read can be
+  set aside there); **Review** dry-runs the undo and shows, per record and part, what it would put back, each
+  file as left by the restore, changed since, added by the restore, or already back, with this PC's file
+  against what undo puts back; **Choose** ticks records and parts (an unticked record still holds back older
+  records' same parts); **Ready** and **Done** follow.
+
+The screens are views over the same types the commands use: restoring over `Restoring/RestoreSession`, putting
+back over `acb undo`'s own run, backing up over `BackupBuilder`, so every decision is theirs and the screens word
+it, escaping archive text as the commands print it. Each task's steps are tested through its flow
+(`Cli/Wizard/BackupFlow`, `RestoreFlow`, `UndoFlow`) and on screen through Terminal.Gui's ANSI driver with
+injected keys. On Linux the driver needs a terminal that reports a size, so the suite runs under `script(1)` with
+one set by `stty`.
 
 ### Elevation (Windows)
 
@@ -430,7 +439,7 @@ Most sections need no administrator. NVIDIA's driver settings do.
   `set-aside/` too, so none is reused.
 - A file part also keeps, under `wrote`, each file's SHA-256 as the restore left it, saved once its writes are
   done. An undo reads only the part's `files`, so a record without `wrote` (one cut short) is put back all the
-  same; the undo wizard uses it to show which files changed since the restore.
+  same; the undo screen uses it to show which files changed since the restore.
 - A record also holds the Steam folder its restore wrote to, and `acb undo` writes back there unless
   `--steam-path` says otherwise; when that folder is gone, its parts wait and say where they looked. A plain
   `acb undo` therefore never puts one Steam's files into another that the PC would find first. An account's
@@ -449,7 +458,7 @@ Most sections need no administrator. NVIDIA's driver settings do.
   who both restore the shared cfg folder, the power plan or vibrance, and then undo in the order they restored,
   leave the PC as the first one's restore left it. Ordering them needs a record every user can read and none can
   forge; until then, each user undoes their own restore before another restores (see "Open decisions"). The undo
-  wizard shows each file a record would put back as left by the restore or changed since, with what it holds now
+  screen shows each file a record would put back as left by the restore or changed since, with what it holds now
   against what undo puts back, so a person sees a later change before undoing over it and can leave that part.
 - `%LOCALAPPDATA%` and `$XDG_STATE_HOME` are read from the environment, as their names say. Whoever sets acb's
   environment already runs as that user and can write the default store too, so this crosses no boundary, and it
@@ -583,14 +592,14 @@ including the other platform's.
 
 Running the restorer is trusted through its code signature (the publisher Windows shows), not through anything the
 backup says about itself. A separately installed `acb` checking such a backup (`verify`, `show`, `plan`, `restore`,
-the wizard) prints the restorer's SHA-256 and says whether it is byte for byte that `acb`; otherwise the person
+the screens) prints the restorer's SHA-256 and says whether it is byte for byte that `acb`; otherwise the person
 checks it against the `SHA256SUMS` of the release it should be. No offline list of released builds is kept: a
 build cannot know the releases after it.
 
 `acb` still never reads an unpacked backup. A restorer has to be unpacked to run, so it looks for the zip it came
 from where Windows' Extract All and `unzip x.zip -d x` put the folder: `dir/name/restorer/acb` proposes
-`dir/name.zip`, which the wizard offers first and opens and checks like any other backup. If the zip is not there
-the wizard asks for it as usual. The Linux entry is stored with mode 755, so `unzip` unpacks it runnable. Windows
+`dir/name.zip`, which the restore screen offers first and opens and checks like any other backup. If the zip is not there
+the restore screen asks for it as usual. The Linux entry is stored with mode 755, so `unzip` unpacks it runnable. Windows
 Explorer's "run from inside the zip" unpacks only the one program into a temp folder, where it finds no backup;
 the README inside the backup says to use Extract All.
 
@@ -604,7 +613,7 @@ platforms, and it cannot load until DemoViewer.NET can load it (see "Loading the
 | 0 | Spike: Terminal.Gui 2.5 and an Argon2id library under Native AOT on `win-x64` and `linux-x64` | done |
 | 1 | Core: move the kit into a library; one rule set; archive v2 writer and strict reader; `hash` level | done |
 | 2 | `acb` headless: `verify`, `show`, `plan`, `restore`, `undo`, `backup`; undo store; failure policy; Windows elevation; policy files. The extension switches to v2; delete `Restore.ps1` and the `.cmd` files | done |
-| 3 | Wizard | done |
+| 3 | Screens (TUI) | done |
 | 4 | Linux sections and Steam roots; the machine seam | done |
 | 5 | `seal` | done |
 | 6 | Self-contained archives, packaging, signing integration | done (Windows Authenticode waits on the publisher identity) |
@@ -612,9 +621,9 @@ platforms, and it cannot load until DemoViewer.NET can load it (see "Loading the
 
 ### Libraries
 
-Terminal.Gui 2.5.0 for the wizard and Konscious.Security.Cryptography.Argon2 1.3.1 (managed, no native code) for
+Terminal.Gui 2.5.0 for the screens and Konscious.Security.Cryptography.Argon2 1.3.1 (managed, no native code) for
 `seal` both publish Native AOT with no trim or AOT warnings, and Argon2id matches RFC 9106 section 5.3's test
-vector. Terminal.Gui's `IDriver.ToString()` returns the screen as text after layout, which the wizard's tests
+vector. Terminal.Gui's `IDriver.ToString()` returns the screen as text after layout, which the screens' tests
 assert on without a real terminal. Build machines need the platform linker: on Windows the MSVC tools, with
 `vswhere.exe` on `PATH`; on Linux `clang`, or `gcc` with `-p:CppCompilerAndLinker=gcc`.
 
@@ -652,8 +661,8 @@ Control off is not built. The machine-wide sections are restored for real only o
   so a link planted in the Steam folder resolves with a standard user's rights. It needs that second process
   protocol and checking on a PC with User Account Control off; it goes with the spare-PC run of the machine-wide
   sections.
-- Undo across Windows users of the shared sections (`cs2game`, `power`, `vibrance`): the undo wizard shows a
+- Undo across Windows users of the shared sections (`cs2game`, `power`, `vibrance`): the undo screen shows a
   file changed since its restore, with what undo would put back, and lets the person leave that part; the
   headless `acb undo` does not, and nothing orders two users' records. A store every user can read and none can
   change would order them; it is still open, as is showing a changed power plan or vibrance level in the undo
-  wizard.
+  screen.

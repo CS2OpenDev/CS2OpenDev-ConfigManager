@@ -187,9 +187,9 @@ public class SealCommandTests
         await Assert.That(keyless.SecretPrompts).IsEmpty().Because("the administrator's run asks nobody");
     }
 
-    /// <summary>The wizard reads the passphrase from its Open step, says on Check when it is missing or wrong, and opens with the right one.</summary>
+    /// <summary>The restore model says when only the seal stands in the way (no passphrase, or a wrong one), so the screen can ask, and opens with the right one.</summary>
     [Test]
-    public async Task TheWizard_OpensASealedBackup_WithThePassphraseFromOpen()
+    public async Task TheRestoreFlow_SaysWhenOnlyTheSealIsInTheWay_AndOpensWithThePassphrase()
     {
         using TestHost host = new();
         using FakeSteam source = new();
@@ -198,11 +198,11 @@ public class SealCommandTests
         RestoreFlow flow = new(host.Host()) { ArchivePath = zip, SteamPath = target.Root };
 
         await Assert.That(flow.Check()).IsFalse();
-        await Assert.That(flow.Refusal).Contains("Type it on Open");
+        await Assert.That(flow.SealRefusal).IsEqualTo(SealNotOpenedException.NeededMessage);
 
         flow.Passphrase = "not the passphrase at all";
         await Assert.That(flow.Check()).IsFalse();
-        await Assert.That(flow.Refusal).IsEqualTo(SealNotOpenedException.WrongMessage);
+        await Assert.That(flow.SealRefusal).IsEqualTo(SealNotOpenedException.WrongMessage);
 
         flow.Passphrase = Passphrase;
         await Assert.That(flow.Check()).IsTrue().Because(flow.Refusal ?? "");

@@ -55,6 +55,9 @@ internal sealed class RestoreFlow
     /// <summary>Why the backup is refused; null once it is open.</summary>
     public string? Refusal { get; private set; }
 
+    /// <summary>The refusal when it is only the seal: no passphrase given, or one that does not open it. A passphrase may fix it.</summary>
+    public string? SealRefusal { get; private set; }
+
     /// <summary>The verified archive, also when the policy refused it after verification.</summary>
     public VerifiedArchive? Archive { get; private set; }
 
@@ -369,6 +372,7 @@ internal sealed class RestoreFlow
     private bool Reopen()
     {
         Refusal = null;
+        SealRefusal = null;
         Archive = null;
         Session = null;
         if (ArchivePath.Length == 0)
@@ -382,8 +386,7 @@ internal sealed class RestoreFlow
         RestoreRequest request = new(ArchivePath, null, _account, SteamPath.Length == 0 ? null : Path.GetFullPath(SteamPath),
             PolicyPath.Length == 0 ? null : Path.GetFullPath(PolicyPath), Gsi)
         {
-            // Asked once: the wizard has no prompt of its own, so a passphrase that does not open the seal is said
-            // on Check, and the person types another on Open.
+            // Tried once: the screen asks again in its own dialog when the seal does not open.
             Passphrase = again => again || passphrase.Length == 0 ? null : passphrase,
             SealKey = key
         };
@@ -395,9 +398,8 @@ internal sealed class RestoreFlow
         {
             _sealKey = null;
             Archive = ex.Archive;
-            Refusal = ex.Message == SealNotOpenedException.NeededMessage
-                ? ex.Message + " Type it on Open, under Passphrase."
-                : ex.Message;
+            Refusal = ex.Message;
+            SealRefusal = ex.Message is SealNotOpenedException.NeededMessage or SealNotOpenedException.WrongMessage ? ex.Message : null;
             return false;
         }
 

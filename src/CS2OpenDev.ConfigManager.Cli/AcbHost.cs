@@ -96,7 +96,7 @@ internal sealed class AcbHost
         ConnectElevated = pipe => OperatingSystem.IsWindows() ? WindowsElevator.Connect(pipe) : null,
         Now = () => DateTimeOffset.Now,
         Executable = Environment.ProcessPath,
-        Wizard = CS2OpenDev.ConfigManager.Cli.Wizard.RestoreWizard.Run,
+        Wizard = CS2OpenDev.ConfigManager.Cli.Wizard.Tui.Run,
         EnsureMachineStore = (root, parent) =>
         {
             if (!OperatingSystem.IsWindows())

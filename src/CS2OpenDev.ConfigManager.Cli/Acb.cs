@@ -5,7 +5,7 @@ internal static class Acb
 {
     public const string Usage = """
         Usage:
-          acb                                              the step-by-step restore wizard (needs a terminal)
+          acb                                              back up, restore or put this PC back on screen (needs a terminal)
           acb verify  <backup.zip> [--policy f] [--json]       check it; say its trust level, when it was made, what it holds
           acb show    <backup.zip> [--section s | --file p]    list it, or print one part or one file
           acb plan    <backup.zip> [options] [--json]          what a restore would change; changes nothing
@@ -50,7 +50,7 @@ internal static class Acb
                 return wizard(host);
             }
 
-            host.Err.WriteLine("The step-by-step wizard needs a terminal. Without one, use the commands:");
+            host.Err.WriteLine("acb on its own opens its screens, which need a terminal. Without one, use the commands:");
             host.Err.WriteLine();
             host.Err.WriteLine(Usage);
             return ExitCodes.Usage;

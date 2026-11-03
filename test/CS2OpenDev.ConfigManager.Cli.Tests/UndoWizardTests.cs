@@ -2,8 +2,6 @@ using CS2OpenDev.ConfigManager.Cli.Wizard;
 using CS2OpenDev.ConfigManager.Kit;
 using CS2OpenDev.ConfigManager.Restoring;
 using CS2OpenDev.ConfigManager.Tests;
-using Terminal.Gui.App;
-using Terminal.Gui.Drivers;
 
 namespace CS2OpenDev.ConfigManager.Cli.Tests;
 
@@ -95,63 +93,5 @@ public class UndoWizardTests
         await Assert.That(said).Contains("is set aside");
         await Assert.That(flow.Records).IsEmpty();
         await Assert.That(Directory.Exists(Path.Combine(host.UserStore, UndoStore.SetAsideFolder, record.Name))).IsTrue();
-    }
-
-    /// <summary>The undo wizard on screen, through the ANSI driver: each step shows its stage, and Put back undoes the restore.</summary>
-    [Test]
-    [NotInParallel("terminal")]
-    public async Task TheScreen_WalksEachStep_AndPutsThePcBack()
-    {
-        // See WizardTests: on Linux the screen needs a terminal, which CI gives the suite with script(1).
-        if (!OperatingSystem.IsWindows() && (Console.IsInputRedirected || Console.IsOutputRedirected))
-        {
-            Skip.Test("on Linux the screen needs a terminal; run the suite under script(1)");
-            return;
-        }
-
-        using TestHost host = new();
-        using FakeSteam source = new();
-        source.Write(FakeSteam.Cfg("autoexec.cfg"), "echo from the backup");
-        using FakeSteam target = new();
-        target.Write(FakeSteam.Cfg("autoexec.cfg"), "echo before the restore");
-        string zip = TestArchives.FromSteam(source, host.Temp, Sections.Cs2Game);
-        await Assert.That(host.Run("restore", "--yes", "--steam-path", target.Root, zip)).IsEqualTo(ExitCodes.Done).Because(host.All);
-
-        UndoFlow flow = new(host.Host());
-        using IApplication app = Application.Create();
-        app.Init(DriverRegistry.Names.ANSI);
-        app.Driver!.SetScreenSize(120, 40);
-        using UndoWizard wizard = new(flow);
-        SessionToken? token = app.Begin(wizard.Wizard);
-        try
-        {
-            string Screen()
-            {
-                app.LayoutAndDraw(true);
-                return app.Driver!.ToString() ?? "";
-            }
-
-            await Assert.That(Screen()).Contains("Set aside the selected record");
-            await Assert.That(wizard.Wizard.GoNext()).IsTrue();
-            await Assert.That(Screen()).Contains("as restored   autoexec.cfg");
-            await Assert.That(wizard.Wizard.GoNext()).IsTrue();
-            await Assert.That(Screen()).Contains("Part: " + Sections.Label(Sections.Cs2Game));
-            await Assert.That(wizard.Wizard.GoNext()).IsTrue();
-            await Assert.That(Screen()).Contains("Nothing stands in the way.");
-            await Assert.That(wizard.Wizard.GoNext()).IsTrue();
-            await Assert.That(Screen()).Contains("Pressing Put back");
-            await Assert.That(wizard.Wizard.GoNext()).IsTrue();
-            await Assert.That(Screen()).Contains("Done: the PC is back as it was");
-        }
-        finally
-        {
-            if (token is not null)
-            {
-                app.End(token);
-            }
-        }
-
-        await Assert.That(target.Read(FakeSteam.Cfg("autoexec.cfg"))).IsEqualTo("echo before the restore");
-        await Assert.That(flow.ExitCode).IsEqualTo(ExitCodes.Done);
     }
 }
