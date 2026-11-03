@@ -15,6 +15,9 @@
     <Folder Name="/plugin/">
         <Project Path="plugin/CS2OpenDev.ConfigManager.DemoViewer/CS2OpenDev.ConfigManager.DemoViewer.csproj"/>
     </Folder>
+    <Folder Name="/tools/">
+        <Project Path="tools/CS2OpenDev.ConfigManager.IdentityKeys/CS2OpenDev.ConfigManager.IdentityKeys.csproj"/>
+    </Folder>
     <Folder Name="/test/">
         <Project Path="test/CS2OpenDev.ConfigManager.Core.Tests/CS2OpenDev.ConfigManager.Core.Tests.csproj"/>
         <Project Path="test/CS2OpenDev.ConfigManager.Cli.Tests/CS2OpenDev.ConfigManager.Cli.Tests.csproj"/>

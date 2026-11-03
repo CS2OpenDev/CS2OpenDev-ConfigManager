@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- The identity level's key ceremony, run offline by the root key holders: make keys, write a delegation, add
+         each holder's signature, print the roots for IdentityTrust.Shipped. Never shipped; acb holds public keys only. -->
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <AssemblyName>acb-identity-keys</AssemblyName>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\..\src\CS2OpenDev.ConfigManager.Core\CS2OpenDev.ConfigManager.Core.csproj"/>
+    </ItemGroup>
+
+</Project>
