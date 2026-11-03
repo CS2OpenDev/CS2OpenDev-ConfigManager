@@ -67,6 +67,23 @@ A sealed backup asks for its passphrase at the terminal, or reads it from `--pas
 passphrases against it, so a generated one is safest. It is taken exactly as typed, so an accented letter typed
 another way on another PC does not open the seal.
 
+`acb backup -o backup.zip --self-contained` also carries `acb` itself in the backup (`restorer/acb.exe`, or
+`restorer/acb` on Linux), for a PC with nothing installed. Unpack the whole backup beside the zip (Extract All on
+Windows, `unzip backup.zip -d backup` on Linux) and run the restorer from that folder: it finds the zip and checks
+it as usual. Checking such a backup with another `acb` says whether its restorer is the same program.
+
+## Downloads
+
+Each release carries `acb-win-x64.exe`, `acb-linux-x64` and `SHA256SUMS`, and every file has a build provenance
+attestation from the release workflow. To check a download:
+
+```
+sha256sum -c --ignore-missing SHA256SUMS
+gh attestation verify acb-win-x64.exe --repo <owner>/CS2OpenDev-ConfigManager
+```
+
+`acb-win-x64.exe` is not code-signed yet, so Windows warns about an unknown publisher until it is.
+
 ## Layout
 
 ```

@@ -141,7 +141,8 @@ Signed JAR and APK v1 broke on zip ambiguities, not on cryptography. The reader 
 - checks every entry's size and SHA-256 while streaming it, and never extracts to a folder the restorer
   then trusts. Restores read from the verified bytes in memory or from a private temp copy made after
   verification;
-- refuses `format` values it does not know and any `platform` other than the one it runs on.
+- refuses `format` values it does not know and any `platform` other than the one it runs on;
+- allows under `restorer/` only the one restorer for the archive's own platform (see "Self-contained archives").
 
 ## Trust levels
 
@@ -284,7 +285,7 @@ acb undo    --set-aside n            move a record aside, so older ones go ahead
                                      or (asked, or --yes) one holding only parts whose Steam, account or
                                      CS2 install is gone, or
                                      an administrator's record of NVIDIA settings the driver will not take
-acb backup  [options] -o <archive>   make a backup without DemoViewer
+acb backup  [options] -o <archive>   make a backup without DemoViewer; --self-contained carries acb in it
 ```
 
 Shared options: `--only`, `--account`, `--steam-path`, `--policy`, `--gsi`, `--yes`, `--json`, `--report f`.
@@ -561,13 +562,40 @@ built yet.
 
 ## Distribution and code signing
 
-- `acb` is signed through the stack-wide code-signing work: Authenticode on Windows, a detached signature
-  plus `SHA256SUMS` on Linux.
-- A self-contained archive carries `restorer/acb[.exe]` for its own platform, listed in the manifest like
-  any entry. Running it is trusted through its code signature (the publisher Windows shows), not through
-  anything it says about itself. A separately installed `acb` checking such an archive also reports
-  whether the bundled restorer matches a released build.
+- `release.yml` publishes `acb` on a `v*` tag, after a maintainer approves the `release-signing` environment:
+  `acb-win-x64.exe` and `acb-linux-x64`, each built Native AOT, tested and smoke-tested alone in an empty folder,
+  with `SHA256SUMS` and a GitHub build provenance attestation for every file (`gh attestation verify <file>
+  --repo <owner>/CS2OpenDev-ConfigManager`). Run by hand it is a dry run that keeps the binaries as workflow
+  artifacts. The tag must name the version `version.json` gives the commit.
+- `acb.exe` is not Authenticode-signed yet. Windows code signing comes from the stack-wide work (DemoViewer.NET's
+  `docs/code-signing/plan.md`), which is waiting on a publisher identity; when it lands, `release.yml` signs
+  `acb.exe` before checksumming it. Linux has no OS signing to target, so there the attestation and `SHA256SUMS`
+  are the signature, as for DemoViewer.NET's Linux build.
 - `acb` reads every earlier archive format it shipped with; `format` is append-only.
+
+### Self-contained archives
+
+`acb backup --self-contained` carries the running `acb` in the backup as `restorer/acb.exe` (Windows) or
+`restorer/acb` (Linux), listed in the manifest like any entry, so a PC with nothing installed can restore it. Only
+a published `acb` is carried (named `acb` or as a release names it); a test host or `dotnet` is refused. The entry
+may be up to 64 MB, against 16 MB for a settings file, and the reader refuses any other name under `restorer/`,
+including the other platform's.
+
+Running the restorer is trusted through its code signature (the publisher Windows shows), not through anything the
+backup says about itself. A separately installed `acb` checking such a backup (`verify`, `show`, `plan`, `restore`,
+the wizard) prints the restorer's SHA-256 and says whether it is byte for byte that `acb`; otherwise the person
+checks it against the `SHA256SUMS` of the release it should be. No offline list of released builds is kept: a
+build cannot know the releases after it.
+
+`acb` still never reads an unpacked backup. A restorer has to be unpacked to run, so it looks for the zip it came
+from where Windows' Extract All and `unzip x.zip -d x` put the folder: `dir/name/restorer/acb` proposes
+`dir/name.zip`, which the wizard offers first and opens and checks like any other backup. If the zip is not there
+the wizard asks for it as usual. The Linux entry is stored with mode 755, so `unzip` unpacks it runnable. Windows
+Explorer's "run from inside the zip" unpacks only the one program into a temp folder, where it finds no backup;
+the README inside the backup says to use Extract All.
+
+The DemoViewer.NET plugin does not make self-contained backups: it would have to ship `acb` binaries for both
+platforms, and it cannot load until DemoViewer.NET can load it (see "Loading the plugin in DemoViewer.NET").
 
 ## Plan
 
@@ -579,7 +607,7 @@ built yet.
 | 3 | Wizard | done |
 | 4 | Linux sections and Steam roots; the machine seam | done |
 | 5 | `seal` | done |
-| 6 | Self-contained archives, packaging, signing integration | signed builds from CI |
+| 6 | Self-contained archives, packaging, signing integration | done (Windows Authenticode waits on the publisher identity) |
 | 7 | `identity` (needs the service) | end-to-end against a staging service; a security review |
 
 ### Libraries
