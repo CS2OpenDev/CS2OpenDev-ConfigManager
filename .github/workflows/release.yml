@@ -1,0 +1,149 @@
+# Release acb: on a v* tag, build and test on Windows and Linux, publish acb Native AOT for win-x64 and linux-x64,
+# smoke-test each binary alone in an empty folder (as a self-contained backup carries it), then publish both to a
+# GitHub Release with SHA256SUMS and a build provenance attestation per file:
+#
+#   gh attestation verify acb-win-x64.exe --repo <owner>/CS2OpenDev-ConfigManager
+#   sha256sum -c --ignore-missing SHA256SUMS
+#
+# Run by hand (workflow_dispatch) it is a dry run: everything but the release, with the binaries kept as workflow
+# artifacts.
+#
+# acb.exe is not Authenticode-signed yet. Windows code signing comes with the CS2OpenDev signing identity (see
+# docs/design.md, "Distribution and code signing"); until then the attestation is what ties a binary to this
+# workflow. The publish job runs in the release-signing environment, so a tag waits for a maintainer's approval.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+            exe: acb.exe
+            asset: acb-win-x64.exe
+          - os: ubuntu-latest
+            rid: linux-x64
+            exe: acb
+            asset: acb-linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # Nerdbank.GitVersioning needs full history
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore tools (nbgv)
+        run: dotnet tool restore
+
+      # The version acb reports and writes into every backup comes from version.json, so the tag must agree with it.
+      - name: Check the tag names this version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version="$(dotnet nbgv get-version -v NuGetPackageVersion)"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "The tag is $GITHUB_REF_NAME, and version.json makes this commit $version: tag it v$version, or change version.json." >&2
+            exit 1
+          fi
+
+      - name: Build (Release)
+        run: dotnet build CS2OpenDev.ConfigManager.slnx -c Release
+
+      - name: Core tests
+        run: dotnet run --project test/CS2OpenDev.ConfigManager.Core.Tests -c Release --no-build
+
+      - name: acb tests
+        if: runner.os == 'Windows'
+        run: dotnet run --project test/CS2OpenDev.ConfigManager.Cli.Tests -c Release --no-build
+
+      # The wizard's screen test needs a terminal on Linux; ci.yml says why.
+      - name: acb tests (in a terminal)
+        if: runner.os == 'Linux'
+        run: script -qec "stty cols 120 rows 40; dotnet run --project test/CS2OpenDev.ConfigManager.Cli.Tests -c Release --no-build" /dev/null
+
+      - name: Put vswhere on PATH
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "C:/Program Files (x86)/Microsoft Visual Studio/Installer" >> "$GITHUB_PATH"
+
+      - name: Publish acb (Native AOT)
+        shell: bash
+        run: dotnet publish src/CS2OpenDev.ConfigManager.Cli -c Release -r ${{ matrix.rid }}
+
+      - name: Check acb.exe loads its DLLs only from System32
+        if: runner.os == 'Windows'
+        shell: bash
+        run: python .github/scripts/pe-load-flags.py artifacts/publish/CS2OpenDev.ConfigManager.Cli/release_${{ matrix.rid }}/acb.exe
+
+      # Only the one file ships, so it is tested with nothing beside it, under its release name.
+      - name: Stage the binary alone
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "artifacts/publish/CS2OpenDev.ConfigManager.Cli/release_${{ matrix.rid }}/${{ matrix.exe }}" "dist/${{ matrix.asset }}"
+          ls -la dist
+
+      - name: Smoke-test the binary alone
+        shell: bash
+        run: bash .github/scripts/acb-smoke.sh "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: release-signing
+    permissions:
+      contents: write       # create the GitHub Release and upload its assets
+      id-token: write       # attest-build-provenance signs through Sigstore with this job's OIDC identity
+      attestations: write   # and stores the attestations on the repository
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: acb-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksum the binaries
+        run: |
+          set -euo pipefail
+          cd dist
+          chmod +x acb-linux-x64
+          sha256sum -- acb-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest the binaries
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/acb-win-x64.exe
+            dist/acb-linux-x64
+            dist/SHA256SUMS
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          prerelease=""
+          case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "acb ${GITHUB_REF_NAME#v}" \
+            --generate-notes $prerelease dist/acb-win-x64.exe dist/acb-linux-x64 dist/SHA256SUMS
