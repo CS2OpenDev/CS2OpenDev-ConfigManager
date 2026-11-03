@@ -142,6 +142,8 @@ Signed JAR and APK v1 broke on zip ambiguities, not on cryptography. The reader 
   then trusts. Restores read from the verified bytes in memory or from a private temp copy made after
   verification;
 - refuses `format` values it does not know and any `platform` other than the one it runs on;
+- refuses, in every JSON document, a member it does not know, a required member missing, and a null where the
+  format has none, so a crafted file is refused rather than read as nulls;
 - allows under `restorer/` only the one restorer for the archive's own platform (see "Self-contained archives").
 
 ## Trust levels
@@ -205,33 +207,71 @@ the identity provider. `docs/identity-service.md` is the contract the service is
 
 1. The player signs in to the CS2OpenDev service. The service's identity provider brokers Steam's OpenID 2.0
    login, and `acb` signs in to the provider with the authorization code flow and PKCE through the browser,
-   receiving the code on a loopback port. The access token lives only in that run.
+   receiving the code on a loopback port. The access token lives only in that run, and goes only to the service
+   whose address, and whose provider's issuer, are compiled into `acb` beside the root keys (none yet), so a
+   service named on the command line cannot relay it. No other service is taken, not even a stand-in on the PC's
+   loopback address, which could send the browser on to the real provider and swap the code for a real token;
+   tests compile their stand-in in. Signing needs a person at the terminal or the screens; headless `--sign` is
+   refused, and so is `--sign` where the browser cannot be on this PC (an SSH session, or Linux with no desktop),
+   because the sign-in comes back to a port on this PC. Ctrl+C stops a sign-in at the terminal with nothing
+   written; a second Ctrl+C ends `acb` at once, for a step that does not stop on the first. A failure the service reports is put in plain words (not allowed to sign, too many signatures and
+   when to retry, the service is down), with the unsigned or sealed backup as the way to save one now.
 2. `acb` (`backup --sign`, or "Sign it for my Steam account" on the backup screen) sends the manifest's SHA-256,
    the platform and the tool version. The configuration itself never leaves the PC.
 3. The service builds the statement with predicate `{ level: "identity", steamId64, signedAt, delegation }`,
    taking the SteamID64 from the token, signs it with ECDSA P-256 using a key held in an HSM or key vault, and
-   returns the envelope. It records `(steamId64, digest, time)` in an append-only log.
+   returns the envelope. It records `(steamId64, digest, time)` in an append-only log, kept for the key's
+   window plus a year (`docs/identity-service.md`, "The log").
 4. `acb` checks the envelope before writing the backup, as any reader would, and every reader checks it offline
-   against the root keys built into it.
+   against the root keys built into it. A signer other than the account whose settings were backed up (another
+   sign-in, perhaps another local user's, reached `acb` first) is saved only when the person says yes at the
+   terminal; the backup screen writes nothing and says why.
 
 Key management follows [TUF](https://theupdateframework.io/)'s split, cut down:
 
-- **Root keys** (three, offline, two to sign) are compiled into `acb` (`IdentityTrust.Shipped`). None exist yet:
+- **Root keys** (three, offline, two needed, and every holder signs each delegation so that replacing any one
+  root later leaves old backups' delegations at the threshold) are compiled into `acb` (`IdentityTrust.Shipped`).
+  A root whose key is lost, whose holder leaves or that may be stolen is removed in the next release, which pins
+  every delegation made so far by its payload's SHA-256 (`IdentityTrust.Shipped.Pinned`), so old backups keep
+  checking and a removed root never vouches for a new delegation. None exist yet:
   until the key ceremony (`tools/CS2OpenDev.ConfigManager.IdentityKeys`) makes them, `acb` refuses every identity
   backup and refuses to sign one.
 - Root keys sign a **delegation**: the current signing keys, each with a validity window. The predicate carries
   the delegation that was current when it was signed, so checking needs no network, and the zip's layout does
   not change.
-- A signature counts if its key was delegated and in its window at `signedAt`, and not revoked by then. A
-  compromised key is revoked by a new delegation that lists it as revoked from a time, and `acb` ships the
-  revocations it knows, so an older delegation is overruled once `acb` is updated. Fetching one online is not
-  built.
+- A signature counts if its key was delegated and in its window at `signedAt`, and not revoked by then. The
+  signer writes `signedAt`, so those times bind only an honest signer. A backup is checked against the
+  delegation it carries, whose version `acb` does not compare, so a new delegation that lists a key as revoked
+  binds only the backups signed under it. A compromised key is stopped by the revocation list each release
+  ships (`IdentityTrust.Shipped.Revoked`; the ceremony tool prints the line), which overrules every delegation
+  once `acb` is updated and voids every signature the key made, whatever its date. Signing keys have short
+  windows, so that costs little in signatures, but no updated `acb` checks the backups it voids as signed. Such a backup is still shown, with the signer it names, a warning that the key was
+  revoked, and that its files match its manifest, so it is unchanged since it was made but who made it is not
+  proven. Using it is a decision: `acb` asks (headless, `--accept-revoked`), and on a yes reads it at the hash
+  level, never as signed, with the claimed signer recorded in the report. Under a policy that needs a signature it
+  is refused unless the policy says `"revokedSignatures": "ask"`, or an administrator gives `--accept-revoked`
+  (acb elevated on Windows, root on Linux) for that one restore. Fetching the list online is not built. The list reaches only readers the thief
+  does not choose: a forged self-contained backup can carry a genuine `acb` from before the revocation. So every
+  identity verdict names the day its revoked keys date from, and an `acb` that is the restorer the backup carries
+  says to check again with one installed on its own.
+- Refusals that may only mean the reader is older than the backup (a manifest format, a payload type, a trust
+  level, a statement or a delegation it does not read, including one with a member it does not know, or a
+  delegation under roots it does not know) say a newer version may read it, and the DemoViewer plugin reports
+  them as backups it cannot check yet, not as unsafe ones. A delegation whose signature by a root this version
+  knows does not check is refused as changed: a keyid is the key's hash, so no newer version would read it.
+- Delegated and root keys are P-256 by their exact SubjectPublicKeyInfo encoding, so every platform takes the
+  same keys. The ceremony shows a holder what a delegation vouches for, and signs only once they confirm it.
 - Signatures are ECDSA P-256 over SHA-256, as r||s, over DSSE's pre-authentication encoding. ECDSA P-256 is in the
   .NET base library on both platforms and works under Native AOT. A post-quantum signature (ML-DSA, in .NET 10
-  where the OS supports it) can be added beside it later as a second signature in the same envelope.
+  where the OS supports it) can be added beside it later as a second signature in the same envelope: an envelope
+  may carry up to four, exactly one by a P-256 key the delegation lists is checked, and the others are left alone.
 
-Every command names the signer, the time and the key, and says when the settings are another account's than the
-signer's. A policy's `steamIds` accept a backup only when it is identity-level and signed by one of them.
+Every command, the restore screen and the plugin's "Check a backup" name the signer, the time and the key, and
+say when the settings are another account's than the signer's, in both the account id and SteamID64 forms.
+Before saving a signed backup, `acb` asks when the signer is not the settings' account, or when the settings name
+no account to compare with; the backup screen, which does not ask, writes nothing then. The signing side
+(delegations, statements, the ceremony) is a separate library, `tools/CS2OpenDev.ConfigManager.IdentityIssuer`,
+that neither `acb` nor the plugin carries. A policy's `steamIds` accept a backup only when it is identity-level and signed by one of them.
 
 ### Organiser policy
 
@@ -244,12 +284,28 @@ rules, never widen them.
   "steamIds": ["76561198029679050", "76561197960287930"],
   "sections": { "allow": ["cs2", "cs2game", "launch", "nvidia"] },
   "nvidia": { "deny": ["0x10835002"] },
-  "requireCs2Closed": true
+  "requireCs2Closed": true,
+  "revokedSignatures": "refuse",
+  "refuseCarriedRestorer": true,
+  "minimumAcbVersion": "1.0.0"
 }
 ```
 
 Every field takes away: a higher level, fewer signers, fewer sections, fewer NVIDIA settings, and with
-`requireCs2Closed` a running CS2 refuses the whole restore instead of leaving its sections. A field the restorer
+`requireCs2Closed` a running CS2 refuses the whole restore instead of leaving its sections.
+`revokedSignatures` (`refuse` or `ask`) says what happens to a backup signed with a revoked key; without it,
+`refuse` when the policy needs a signature (`minimumLevel` above `hash`, or `steamIds`) and `ask` otherwise, as
+with no policy. Under `refuse`, an administrator's `--accept-revoked` applies one anyway, and `steamIds` are then
+compared with the account the revoked signature names. `refuseCarriedRestorer` refuses checks and restores by
+the copy of `acb` a self-contained backup carries, which whoever made the backup chose, along with the revoked
+keys it knows; `minimumAcbVersion` refuses an older `acb`. Both stop a genuine but stale `acb`; neither can stop a
+modified one, which is why an organiser runs their own. Every released `acb` knows these fields, so none half-applies
+a policy that has them.
+
+A player can pass the event's policy to `acb backup --policy`, which refuses up front a backup the policy would
+refuse (too low a level, unsigned where Steam IDs are named, a signature for an account it does not name, only
+parts it does not restore) and says which parts it will leave and whether the backup's own `acb` may restore
+it. That helps an honest player; it enforces nothing, as the maker controls their own PC. The restore side does. A field the restorer
 does not know, a misspelt section, a malformed id, comments or trailing commas refuse the file, so a policy is
 never half-applied. `steamIds` is checked against a signature, never the manifest's own account: the reader
 hands over the signer it verified, and a backup below `identity`, with no verified signer, or signed by an account

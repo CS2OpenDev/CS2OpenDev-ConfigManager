@@ -13,11 +13,19 @@ info:
 
     The service does not talk to Steam. Its OpenID Connect provider brokers Steam's OpenID 2.0 login, and the
     `sign` operation accepts only that provider's access tokens, with the player's SteamID64 in a claim the service
-    trusts. `acb` is a public client (no secret):
+    trusts.
 
-    1. `GET /v1/acb/config` names the provider (`issuer`), the client id and the scope.
-    2. `acb` reads `{issuer}/.well-known/openid-configuration` and uses `authorization_endpoint` and
-       `token_endpoint` from it. `issuer` must be https.
+    `acb` signs only through the service whose address is compiled into it, and signs in only at that
+    service's issuer, also compiled in, so a token from the real provider is never sent to another service. No
+    other service is taken, not even one on the PC's loopback address: its sign-in page could send the browser on
+    to the real provider with `acb`'s own redirect, state and challenge, and swap the code that comes back for a
+    real token. Tests compile their stand-in in instead. `acb` is a public client (no secret):
+
+    1. `GET /v1/acb/config` names the provider (`issuer`), the client id and the scope. `issuer` must be
+       exactly the issuer `acb` knows.
+    2. `acb` reads `{issuer}/.well-known/openid-configuration`. Its `issuer` must equal the configured one
+       (OpenID Connect Discovery 1.0, section 4.3), and `authorization_endpoint` and `token_endpoint` must be
+       on the issuer's own scheme, host and port. Otherwise `acb` stops before opening or sending anything.
     3. It opens the browser at the authorization endpoint with `response_type=code`, `client_id`, `scope`,
        `state`, `code_challenge`, `code_challenge_method=S256` and `redirect_uri=http://127.0.0.1:{port}/callback`,
        on a port it picked. The provider's client must accept a loopback redirect on any port (RFC 8252, 7.3) and
@@ -33,6 +41,7 @@ info:
 
     `acb` reports the HTTP status of any non-2xx answer and writes no backup; it does not read the body. The
     service should still answer with `application/problem+json` (RFC 9457) for its own logs and other clients.
+    An answer that is not JSON, or lacks a member its schema requires, or has it null, is a failed step too.
 
     ## Strictness
 
@@ -40,6 +49,9 @@ info:
     predicate or the delegation makes it refuse the answer. Every schema below that says
     `additionalProperties: false` means exactly that. Before writing the backup `acb` checks the envelope as any
     reader would (see `IdentityEnvelope`); a signature that does not check is a failed signing.
+    That check is one public function, `Identity.CheckEnvelope` in `CS2OpenDev.ConfigManager.Core`, which takes the
+    signature file, the manifest's digest, the trust and the time; the service's tests run it on its own answers
+    against test roots made with `CS2OpenDev.ConfigManager.IdentityIssuer`.
 
     Base64 throughout is standard base64 with padding (RFC 4648, section 4), not base64url.
 
@@ -51,8 +63,8 @@ info:
 servers:
   - url: '{service}'
     description: |
-      The service's base address, given to `acb` as `--identity-service` or `ACB_IDENTITY_SERVICE`. `acb` accepts
-      https only (plain http only on a loopback address, for testing), with no user info and no query.
+      The service's base address, compiled into `acb` (https, no user info, no query). `--identity-service` and
+      `ACB_IDENTITY_SERVICE` are refused unless they name that same address.
     variables:
       service:
         default: https://api.cs2opendev.dev
@@ -98,7 +110,9 @@ paths:
            the delegation that lists the key it signs with, unchanged;
         3. signs it with its current signing key, held in an HSM or key vault and never exported;
         4. appends `(steamId64, manifestSha256, platform, tool, signedAt, keyid)` to its append-only log, and
-           answers only once that is stored;
+           answers only once that is stored. An entry is kept until its key's `notAfter` plus one year and then
+           deleted; it is read only for incident response. Client addresses serve rate limiting only and are
+           not written with entries (docs/identity-service.md, "The log");
         5. answers `200` with the envelope.
 
         The settings themselves are never sent. `platform` and `tool` are for the log; they are not in the
@@ -162,7 +176,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Problem'
         '429':
-          description: Too many signatures for this account or address; try later.
+          description: Too many signatures for this account or address; try later. `acb` tells the person when, from `Retry-After`.
           headers:
             Retry-After:
               schema:
@@ -184,7 +198,8 @@ components:
       description: |
         An access token from the identity provider named by `GET /v1/acb/config`, issued to the `acb` client by the
         authorization code flow with PKCE. The service checks its signature, issuer, audience and expiry, and
-        reads the SteamID64 from the claim the provider sets from the brokered Steam login.
+        reads the SteamID64 from the claim the provider sets from the brokered Steam login. Binding the token to
+        the client (DPoP, RFC 9449) is not decided yet (docs/identity-service.md, "Not decided").
 
   responses:
     Unavailable:
@@ -206,7 +221,8 @@ components:
           format: uri
           description: |
             The OpenID Connect issuer. `acb` appends `/.well-known/openid-configuration` to it, without a
-            trailing slash. https only.
+            trailing slash. It must be exactly the issuer compiled into `acb`, and the discovery document's
+            `issuer` must equal it.
           pattern: '^https://'
         clientId:
           type: string
@@ -294,14 +310,20 @@ components:
       additionalProperties: false
       required: [payloadType, payload, signatures]
       description: |
-        A DSSE envelope over the statement, signed once by the service. `acb` refuses it unless:
+        A DSSE envelope over the statement, signed once by the service with ECDSA P-256. It may carry up to four
+        signatures: exactly one must be by a P-256 key the delegation lists, and any other (by a key the delegation
+        does not list, or does not list as P-256, such as a post-quantum signature added later) is not checked and
+        never makes a backup check. `acb` refuses it unless:
 
         - `payloadType` and the statement's `_type` and `predicateType` are the values below;
         - the statement's only subject is `manifest.json` with the digest that was sent;
         - the delegation is signed by at least two of the root keys built into `acb`;
-        - the one signature's `keyid` is a key the delegation lists, `signedAt` is in that key's window
-          (`notBefore` <= `signedAt` < `notAfter`) and before any revocation of it, whether the delegation's or one
-          `acb` ships;
+        - exactly one signature's `keyid` is a P-256 key the delegation lists, and `signedAt` is in that key's window
+          (`notBefore` <= `signedAt` < `notAfter`) and before the delegation's `revokedFrom` for it, if any;
+        - that key is not among the stolen keys `acb` ships, which count for no signature whatever `signedAt` says,
+          since the signer writes it;
+        - the key's `spki` is a P-256 SubjectPublicKeyInfo (named curve prime256v1, uncompressed point), byte for
+          byte;
         - `signedAt` is no more than one hour ahead of the PC's clock;
         - the signature checks.
       properties:
@@ -316,7 +338,7 @@ components:
         signatures:
           type: array
           minItems: 1
-          maxItems: 1
+          maxItems: 4
           items:
             $ref: '#/components/schemas/DsseSignature'
 
@@ -416,7 +438,15 @@ components:
       type: object
       additionalProperties: false
       required: [_type, version, issued, keys]
-      description: The service's signing keys, as the root keys vouch for them. A higher version replaces a lower.
+      description: |
+        The service's signing keys, as the root keys vouch for them. `version` orders delegations for the
+        ceremony and the service (each new one is higher); `acb` checks a backup against the delegation it
+        carries and does not compare versions. A key revoked here therefore binds only backups signed under this
+        delegation, and only an honest signer; a stolen key is stopped by the revocation list each `acb` release
+        ships, which voids every signature the key made, but only in the `acb` that ships it. Every root holder
+        whose key is still in use signs each delegation, so a root replaced later still leaves it at the threshold,
+        and the release that removes a root pins every earlier delegation by the SHA-256 of its payload, so it
+        checks without the removed root.
       properties:
         _type:
           const: https://cs2opendev.dev/acb/delegation/v1
@@ -442,7 +472,9 @@ components:
         spki:
           allOf:
             - $ref: '#/components/schemas/Base64'
-          description: The P-256 public key as SubjectPublicKeyInfo DER, base64. Its SHA-256 must equal `keyid`.
+          description: >-
+            The P-256 public key as SubjectPublicKeyInfo DER, base64: the named curve prime256v1 and an
+            uncompressed point, 91 bytes. Its SHA-256 must equal `keyid`.
         notBefore:
           type: string
           format: date-time
@@ -453,7 +485,9 @@ components:
         revokedFrom:
           type: string
           format: date-time
-          description: Present once the key is revoked; a signature dated at or after it does not count.
+          description: >-
+            Present once the service stopped using the key; a signature dated at or after it does not count. The
+            signer writes that date, so this binds only an honest signer.
 
     Problem:
       type: object

@@ -59,7 +59,13 @@ only for a copy of `acb.exe` in a folder nobody but administrators can change (s
 `acb` run as an administrator writes nothing into the Steam folder, so run it without administrator for those
 parts (on a PC where User Account Control is off, from a standard Windows account).
 
-An organiser can pass a policy file (`--policy`) that only narrows what is restored. `acb plan backup.zip
+An organiser can pass a policy file (`--policy`) that only narrows what is restored. Players can pass the
+event's policy to `acb backup --policy` too, which refuses up front a backup that policy would refuse.
+
+A signed backup whose signing key was later revoked is still shown, with a warning that its signature no longer
+proves who made it and that its files still match (so it is unchanged since it was made). `acb` asks before using
+it, or takes `--accept-revoked`; under a policy that needs a signature, only an administrator's `--accept-revoked`
+overrides the policy's refusal. `acb plan backup.zip
 --report plan.json` saves a plan for `acb restore --plan plan.json`, which the same version of `acb` applies only
 while the PC still matches it (and with the same policy, given again); add `--dry-run` to check that without
 applying it.
