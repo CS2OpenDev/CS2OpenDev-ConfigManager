@@ -73,6 +73,25 @@ public static class BackupBuilder
         }
     }
 
+    /// <summary>
+    ///     What a backup with <paramref name="options" /> would save, part by part, without writing one: the capture
+    ///     runs into a private temp folder that is deleted afterwards. Reads only, like <see cref="Create" />.
+    /// </summary>
+    public static RunReport Preview(CaptureOptions options, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        string work = Path.Combine(Path.GetTempPath(), "acb-" + Guid.NewGuid().ToString("N"));
+        options.Cancellation = ct;
+        try
+        {
+            return KitBackup.Capture(options, Path.Combine(work, "capture"), null);
+        }
+        finally
+        {
+            DeleteQuietly(work);
+        }
+    }
+
     internal static string Readme(string platform, bool sealedWithPassphrase = false, bool selfContained = false) =>
         $"""
          Advanced Config Backup
