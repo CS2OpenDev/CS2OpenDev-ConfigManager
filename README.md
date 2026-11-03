@@ -35,6 +35,7 @@ list of what is saved, what is left out on purpose, and why.
 acb                                      the screens: back up, restore, or put this PC back
 acb backup -o backup.zip                 save this PC's settings
 acb backup -o backup.zip --seal          the same, sealed with a passphrase (Enter alone makes six random words)
+acb backup -o backup.zip --sign          signed for your Steam account (needs the CS2OpenDev service; not running yet)
 acb verify backup.zip                    check it: its trust level, when it was made, that its files match
 acb plan backup.zip                      what a restore would change, changing nothing
 acb restore backup.zip                   restore it, recording what it replaces

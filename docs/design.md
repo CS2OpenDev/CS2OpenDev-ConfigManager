@@ -201,27 +201,37 @@ In detail:
 ### `identity`: signed by a Steam account
 
 The model is Sigstore's (sign in with an identity, a service vouches for it, check offline) with Steam as
-the identity provider.
+the identity provider. `docs/identity-service.md` is the contract the service is built against.
 
-1. The player signs in to the CS2OpenDev service with Steam (OpenID 2.0, through a loopback browser flow).
-2. DemoViewer sends the manifest's SHA-256, the platform and the tool version. The configuration itself
-   never leaves the PC.
-3. The service builds the statement with predicate `{ level: "identity", steamId64, signedAt }`, signs it
-   with ECDSA P-256 using a key held in an HSM or key vault, and returns the envelope with the signing
-   key's delegation (below). It records `(steamId64, digest, time)` in an append-only log.
-4. The restorer verifies offline against the root keys built into it.
+1. The player signs in to the CS2OpenDev service. The service's identity provider brokers Steam's OpenID 2.0
+   login, and `acb` signs in to the provider with the authorization code flow and PKCE through the browser,
+   receiving the code on a loopback port. The access token lives only in that run.
+2. `acb` (`backup --sign`, or "Sign it for my Steam account" on the backup screen) sends the manifest's SHA-256,
+   the platform and the tool version. The configuration itself never leaves the PC.
+3. The service builds the statement with predicate `{ level: "identity", steamId64, signedAt, delegation }`,
+   taking the SteamID64 from the token, signs it with ECDSA P-256 using a key held in an HSM or key vault, and
+   returns the envelope. It records `(steamId64, digest, time)` in an append-only log.
+4. `acb` checks the envelope before writing the backup, as any reader would, and every reader checks it offline
+   against the root keys built into it.
 
 Key management follows [TUF](https://theupdateframework.io/)'s split, cut down:
 
-- **Root keys** (offline, two of three to sign) are compiled into `acb` and DemoViewer.
-- Root keys sign a **delegation**: the current signing keys, each with a validity window. The envelope
-  carries the delegation that was current when it was signed, so checking needs no network.
-- A signature counts if its key was delegated and in its window at `signedAt`. A compromised key is
-  revoked by a new delegation that lists it as revoked from a time, which ships with the next `acb`
-  release and is fetched opportunistically when online.
-- ECDSA P-256 is in the .NET base library on both platforms and works under Native AOT. A post-quantum
-  signature (ML-DSA, in .NET 10 where the OS supports it) can be added beside it later as a second
-  signature in the same envelope.
+- **Root keys** (three, offline, two to sign) are compiled into `acb` (`IdentityTrust.Shipped`). None exist yet:
+  until the key ceremony (`tools/CS2OpenDev.ConfigManager.IdentityKeys`) makes them, `acb` refuses every identity
+  backup and refuses to sign one.
+- Root keys sign a **delegation**: the current signing keys, each with a validity window. The predicate carries
+  the delegation that was current when it was signed, so checking needs no network, and the zip's layout does
+  not change.
+- A signature counts if its key was delegated and in its window at `signedAt`, and not revoked by then. A
+  compromised key is revoked by a new delegation that lists it as revoked from a time, and `acb` ships the
+  revocations it knows, so an older delegation is overruled once `acb` is updated. Fetching one online is not
+  built.
+- Signatures are ECDSA P-256 over SHA-256, as r||s, over DSSE's pre-authentication encoding. ECDSA P-256 is in the
+  .NET base library on both platforms and works under Native AOT. A post-quantum signature (ML-DSA, in .NET 10
+  where the OS supports it) can be added beside it later as a second signature in the same envelope.
+
+Every command names the signer, the time and the key, and says when the settings are another account's than the
+signer's. A policy's `steamIds` accept a backup only when it is identity-level and signed by one of them.
 
 ### Organiser policy
 
@@ -617,7 +627,7 @@ platforms, and it cannot load until DemoViewer.NET can load it (see "Loading the
 | 4 | Linux sections and Steam roots; the machine seam | done |
 | 5 | `seal` | done |
 | 6 | Self-contained archives, packaging, signing integration | done (Windows Authenticode waits on the publisher identity) |
-| 7 | `identity` (needs the service) | end-to-end against a staging service; a security review |
+| 7 | `identity` | client done (checking, signing in, signing, key ceremony), tested against a stand-in; waits on the service, the root keys, and a security review |
 
 ### Libraries
 
@@ -651,7 +661,7 @@ Control off is not built. The machine-wide sections are restored for real only o
 
 ## Open decisions
 
-- The service that runs `identity` signing. Assumed: the planned shared CS2OpenDev web service.
+- The service that runs `identity` signing: the planned shared CS2OpenDev web service, built to `docs/identity-service.md`.
 - How DemoViewer.NET loads the plugin: a declared first-party pack, or general installed extensions (see
   "Loading the plugin in DemoViewer.NET").
 - The restorer's command name (`acb` for now).
