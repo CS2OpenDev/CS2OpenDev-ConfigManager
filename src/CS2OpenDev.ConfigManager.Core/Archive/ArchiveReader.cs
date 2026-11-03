@@ -69,6 +69,10 @@ public sealed class VerifiedArchive
     /// <summary>The SHA-256 of manifest.json: one value that names this exact archive's content.</summary>
     public string ManifestSha256 { get; }
 
+    /// <summary>The restorer this archive carries, as its manifest lists it; null when it is not self-contained.</summary>
+    public ArchiveEntry? Restorer =>
+        Manifest.Entries.FirstOrDefault(e => e.Path == ArchiveFormat.RestorerEntry(Manifest.Platform));
+
     public bool Contains(string path) => _entries.ContainsKey(path);
 
     public ReadOnlyMemory<byte> Read(string path) =>
@@ -177,7 +181,7 @@ public static class ArchiveReader
                     throw new ArchiveRejectedException($"The backup's '{name}' is encrypted.");
                 }
 
-                byte[] bytes = ReadCapped(entry, ArchiveFormat.MaxEntryBytes);
+                byte[] bytes = ReadCapped(entry, ArchiveFormat.EntryCap(name));
                 total += bytes.LongLength;
                 if (total > ArchiveFormat.MaxTotalBytes)
                 {
@@ -340,6 +344,13 @@ public static class ArchiveReader
             if (!listed.Add(entry.Path))
             {
                 throw new ArchiveRejectedException($"manifest.json lists '{entry.Path}' twice.");
+            }
+
+            // A restorer is a program someone may run, so only the one name for the backup's own platform is allowed.
+            if (entry.Path.StartsWith(ArchiveFormat.RestorerFolder, StringComparison.Ordinal) && entry.Path != ArchiveFormat.RestorerEntry(manifest.Platform))
+            {
+                throw new ArchiveRejectedException(
+                    $"The backup holds '{entry.Path}'. The only restorer a {manifest.Platform} backup carries is {ArchiveFormat.RestorerEntry(manifest.Platform)}.");
             }
 
             if (!raw.TryGetValue(entry.Path, out byte[]? bytes))

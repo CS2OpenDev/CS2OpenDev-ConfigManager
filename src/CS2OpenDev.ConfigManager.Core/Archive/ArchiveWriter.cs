@@ -18,12 +18,13 @@ public static class ArchiveWriter
     /// <summary>
     ///     Zips every file under <paramref name="stagingDir" /> with a manifest naming each one, a README, and a
     ///     DSSE envelope: at the <see cref="TrustLevel.Seal" /> level, signed with <paramref name="seal" />, when
-    ///     given one, and at the <see cref="TrustLevel.Hash" /> level otherwise. The zip is written beside
-    ///     <paramref name="zipPath" /> and moved into place only when complete; an existing file there is never
-    ///     replaced.
+    ///     given one, and at the <see cref="TrustLevel.Hash" /> level otherwise. With <paramref name="restorer" />, the
+    ///     archive is self-contained: those bytes go in as the platform's <see cref="ArchiveFormat.RestorerEntry" />,
+    ///     listed in the manifest like any entry. The zip is written beside <paramref name="zipPath" /> and moved into
+    ///     place only when complete; an existing file there is never replaced.
     /// </summary>
     public static ArchiveManifest Write(string stagingDir, string zipPath, ArchiveContent content, DateTimeOffset created, CancellationToken ct,
-        SealKey? seal = null)
+        SealKey? seal = null, byte[]? restorer = null)
     {
         if (!Platforms.IsKnown(content.Platform))
         {
@@ -48,7 +49,8 @@ public static class ArchiveWriter
             }
 
             string relative = Path.GetRelativePath(stagingDir, file).Replace(Path.DirectorySeparatorChar, '/');
-            if (relative is ArchiveFormat.ManifestEntry or ArchiveFormat.SignatureEntry or ArchiveFormat.ReadmeEntry)
+            if (relative is ArchiveFormat.ManifestEntry or ArchiveFormat.SignatureEntry or ArchiveFormat.ReadmeEntry
+                || relative.StartsWith(ArchiveFormat.RestorerFolder, StringComparison.OrdinalIgnoreCase))
             {
                 throw new IOException($"The staging folder holds {relative}, a name the archive writes itself.");
             }
@@ -60,6 +62,11 @@ public static class ArchiveWriter
             }
 
             data[relative] = File.ReadAllBytes(file);
+        }
+
+        if (restorer is not null)
+        {
+            data[ArchiveFormat.RestorerEntry(content.Platform)] = restorer;
         }
 
         List<ArchiveEntry> entries = [.. data.OrderBy(p => p.Key, StringComparer.Ordinal)
@@ -108,9 +115,10 @@ public static class ArchiveWriter
         long total = 0;
         foreach (ArchiveEntry entry in entries)
         {
-            if (entry.Size > ArchiveFormat.MaxEntryBytes)
+            long cap = ArchiveFormat.EntryCap(entry.Path);
+            if (entry.Size > cap)
             {
-                throw new IOException($"{entry.Path} is over {ArchiveFormat.MaxEntryBytes / (1024 * 1024)} MB.");
+                throw new IOException($"{entry.Path} is over {cap / (1024 * 1024)} MB.");
             }
 
             total += entry.Size;
@@ -139,6 +147,12 @@ public static class ArchiveWriter
     {
         ZipArchiveEntry entry = zip.CreateEntry(name, CompressionLevel.Optimal);
         entry.LastWriteTime = created;
+        // unzip and file managers on Linux give an entry the Unix mode stored with it, so the restorer unpacks runnable.
+        if (name == ArchiveFormat.RestorerEntry(Platforms.LinuxX64))
+        {
+            entry.ExternalAttributes = Convert.ToInt32("100755", 8) << 16;
+        }
+
         using Stream stream = entry.Open();
         stream.Write(bytes);
     }

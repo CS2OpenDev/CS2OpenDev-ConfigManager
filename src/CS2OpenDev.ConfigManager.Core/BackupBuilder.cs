@@ -17,10 +17,11 @@ public static class BackupBuilder
     /// <summary>
     ///     Captures into a private temp folder, then writes <paramref name="zipPath" /> from only what the capture
     ///     record lists, so the copies of a part that failed never reach the archive. No archive is written when no
-    ///     part was captured; the report says why. With <paramref name="seal" /> the archive is sealed with it.
+    ///     part was captured; the report says why. With <paramref name="seal" /> the archive is sealed with it, and
+    ///     with <paramref name="restorer" /> it carries those bytes as its restorer (self-contained).
     /// </summary>
     public static RunReport Create(CaptureOptions options, string zipPath, ArchiveTool tool, DateTimeOffset now, CancellationToken ct,
-        SealKey? seal = null)
+        SealKey? seal = null, byte[]? restorer = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         string platform = ArchiveFormat.CurrentPlatform
@@ -62,7 +63,8 @@ public static class BackupBuilder
             List<ArchiveSection> sections = [.. report.Results.Where(r => r.Outcome == "done")
                 .Select(r => new ArchiveSection(r.Section, Sections.Label(r.Section), string.IsNullOrEmpty(r.Detail) ? null : [r.Detail]))];
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(zipPath))!);
-            ArchiveWriter.Write(pack, zipPath, new ArchiveContent(platform, tool, account, sections, Readme(platform, seal is not null)), now, ct, seal);
+            ArchiveWriter.Write(pack, zipPath, new ArchiveContent(platform, tool, account, sections, Readme(platform, seal is not null, restorer is not null)), now, ct,
+                seal, restorer);
             return report;
         }
         finally
@@ -71,7 +73,7 @@ public static class BackupBuilder
         }
     }
 
-    internal static string Readme(string platform, bool sealedWithPassphrase = false) =>
+    internal static string Readme(string platform, bool sealedWithPassphrase = false, bool selfContained = false) =>
         $"""
          Advanced Config Backup
          ======================
@@ -95,8 +97,32 @@ public static class BackupBuilder
          to the address they name, so a restore writes them only when given --gsi. Give --gsi to acb plan
          as well, so the plan shows them as written; a restore --plan needs the same --gsi as its plan.
 
-         It restores only on {platform}.
+         It restores only on {platform}.{(selfContained ? SelfContainedReadme(platform) : "")}
          """;
+
+    private static string SelfContainedReadme(string platform)
+    {
+        bool windows = platform == Platforms.WindowsX64;
+        string exe = windows ? ArchiveFormat.RestorerEntry(platform).Replace('/', '\\') : ArchiveFormat.RestorerEntry(platform);
+        string unpack = windows
+            ? "right-click this file, pick Extract All, and keep the folder it offers"
+            : "unzip <this file> -d <its name without .zip>";
+        string trust = windows
+            ? "Windows shows who published it before it runs; trust that, not anything this file says."
+            : "Before running it, check sha256sum restorer/acb against the SHA256SUMS of the acb release it should be.";
+        return $"""
+
+
+            This backup carries its own restorer, {exe}: the acb that made it. To use it, unpack the
+            whole backup into a folder of the same name beside this file:
+
+              {unpack}
+
+            then run {exe} from that folder. It finds this file beside the folder and checks it as
+            above; the unpacked copy is never what it restores. The restorer is a program, so run it only
+            from a backup whose source you trust. {trust}
+            """;
+    }
 
     private const string SealReadme = """
 

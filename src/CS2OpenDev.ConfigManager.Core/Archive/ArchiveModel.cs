@@ -5,9 +5,15 @@ using System.Text.Json.Serialization;
 
 namespace CS2OpenDev.ConfigManager.Archive;
 
-/// <summary>Names and limits of the v2 archive (docs/advanced-config-backup-v2.md, "Archive format v2").</summary>
+/// <summary>Names and limits of the v2 archive (docs/design.md, "Archive format v2").</summary>
 public static class ArchiveFormat
 {
+    /// <summary>Where a self-contained archive carries its restorer. Nothing else may sit under it.</summary>
+    public const string RestorerFolder = "restorer/";
+
+    /// <summary>A restorer is one native executable, so it may be larger than any settings file.</summary>
+    public const long MaxRestorerBytes = 64L * 1024 * 1024;
+
     public const string Format = "acb/2";
     public const string ManifestEntry = "manifest.json";
     public const string SignatureEntry = "signature.dsse.json";
@@ -31,6 +37,14 @@ public static class ArchiveFormat
         : OperatingSystem.IsWindows() ? Platforms.WindowsX64
         : OperatingSystem.IsLinux() ? Platforms.LinuxX64
         : null;
+
+    /// <summary>The one restorer an archive for <paramref name="platform" /> may carry: acb for that platform.</summary>
+    public static string RestorerEntry(string platform) => RestorerFolder + RestorerFileName(platform);
+
+    public static string RestorerFileName(string platform) => platform == Platforms.WindowsX64 ? "acb.exe" : "acb";
+
+    /// <summary>The most one entry may unpack to: a restorer's cap under <see cref="RestorerFolder" />, a settings file's elsewhere.</summary>
+    public static long EntryCap(string path) => path.StartsWith(RestorerFolder, StringComparison.Ordinal) ? MaxRestorerBytes : MaxEntryBytes;
 }
 
 public static class Platforms

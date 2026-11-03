@@ -381,7 +381,7 @@ public class ArchiveV2Tests
         return copy;
     }
 
-    private static byte[] Envelope(string manifestSha, string level, DsseSignature[] signatures)
+    internal static byte[] Envelope(string manifestSha, string level, DsseSignature[] signatures)
     {
         Statement statement = new(ArchiveFormat.StatementType,
             [new StatementSubject(ArchiveFormat.ManifestEntry, new DigestSet(manifestSha))], ArchiveFormat.PredicateType, new TrustPredicate(level));
