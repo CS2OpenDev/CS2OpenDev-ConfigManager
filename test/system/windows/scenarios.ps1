@@ -72,11 +72,13 @@ else {
 
     # 3. A cfg folder the player may not add files to (deny ACE), then a locked target.
     $cfg = Split-Path $autoexec
-    $acl = Get-Acl $cfg
-    $deny = New-Object Security.AccessControl.FileSystemAccessRule($identity.Name, 'CreateFiles', 'Deny')
-    $acl.AddAccessRule($deny); Set-Acl $cfg $acl
+    # icacls, not Set-Acl: a folder in a container layer can carry an ACL out of canonical order, which .NET refuses
+    # to change and icacls rewrites in order.
+    icacls $cfg /deny "$($identity.Name):(WD)" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls /deny exited $LASTEXITCODE" }
     Acb 2 @('restore', "$work\backup.zip", '--yes', '--only', 'cs2game') | Out-Null
-    $acl.RemoveAccessRule($deny) | Out-Null; Set-Acl $cfg $acl
+    icacls $cfg /remove:d $identity.Name | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls /remove:d exited $LASTEXITCODE" }
     Holds $autoexec 'echo target'
     Ok 'cfg folder denied new files: section left, exit 2'
 
