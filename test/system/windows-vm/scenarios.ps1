@@ -75,3 +75,5 @@ $out = & $Acb backup -o "$work\input.zip" --only input 2>&1 | Out-String
 Info "backup of input exited $LASTEXITCODE"; Write-Host $out
 Info "nvapi64.dll present: $(Test-Path "$env:SystemRoot\System32\nvapi64.dll")"
 Write-Host "all $script:pass asserted scenarios passed"
+# The hotkey probe above only reports; its exit code is not this script's.
+exit 0

@@ -5,8 +5,9 @@
 #   docker build -t acb-windows-pc -f test/system/windows/Dockerfile <context>
 #   docker run --rm --isolation=process --user player acb-windows-pc     # the player's run
 #   docker run --rm --isolation=process acb-windows-pc                   # ContainerAdministrator's run
-# Process isolation needs the image's Windows build to match the host's: ltsc2025 (26100) on windows-2025 runners.
-ARG BASE=mcr.microsoft.com/windows/servercore:ltsc2025
+# Process isolation needs the image's Windows build to match the host's: ltsc2022 (20348) on windows-2022 runners,
+# the newest GitHub image with a Docker engine. On a 2025 host, pass --build-arg BASE=...servercore:ltsc2025.
+ARG BASE=mcr.microsoft.com/windows/servercore:ltsc2022
 FROM ${BASE}
 SHELL ["powershell", "-NoProfile", "-Command", "$ErrorActionPreference = 'Stop';"]
 
