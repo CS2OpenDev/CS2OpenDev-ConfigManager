@@ -111,11 +111,12 @@ jobs:
           docker build -t acb-linux-pc -f test/system/linux/Dockerfile context
           docker run --rm acb-linux-pc
 
-  # A Windows player PC: Server Core, process isolation (the image's build matches windows-2025's), a standard user
+  # A Windows player PC: Server Core, process isolation (the image's build matches windows-2022's), a standard user
   # and ContainerAdministrator. test/system/windows/scenarios.ps1 says what it asserts and what it only reports.
+  # windows-2022, as the windows-2025 image has no Docker engine.
   windows-pc:
     needs: build
-    runs-on: windows-2025
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

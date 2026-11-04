@@ -621,7 +621,7 @@ away after the run, in layers:
 1. **Fakes**, every push: every section's restore, rollback and undo, and every rule.
 2. **A Linux container**, every push: Steam found by itself, the default store, CS2 running, read-only folders, the
    NVIDIA application profile.
-3. **A Windows container** (Server Core, process isolation on `windows-2025`), every push: Steam found through the
+3. **A Windows container** (Server Core, process isolation on `windows-2022`), every push: Steam found through the
    registry, standard-user restores, real NTFS denials and locks, the administrator's rule for the Steam folder.
 4. **The Windows runner VM itself**, nightly and on pushes to main: the Game Bar values and the power plan restored
    and undone through the real registry and `powercfg`.
