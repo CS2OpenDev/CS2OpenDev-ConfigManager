@@ -39,7 +39,7 @@ jobs:
         run: dotnet tool restore
 
       - name: Build (Release)
-        run: dotnet build CS2OpenDev.ConfigManager.slnx -c Release
+        run: dotnet build CS2OpenDev-ConfigManager.slnx -c Release
 
       # TUnit executables, so they run via `dotnet run`, not `dotnet test`.
       - name: Core tests

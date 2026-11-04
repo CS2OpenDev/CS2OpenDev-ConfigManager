@@ -130,7 +130,7 @@ Needs the .NET 10 SDK (`global.json`).
 
 ```
 dotnet tool restore
-dotnet build CS2OpenDev.ConfigManager.slnx
+dotnet build CS2OpenDev-ConfigManager.slnx
 dotnet run --project test/CS2OpenDev.ConfigManager.Core.Tests
 dotnet run --project test/CS2OpenDev.ConfigManager.Cli.Tests
 dotnet run --project test/CS2OpenDev.ConfigManager.DemoViewer.Tests

@@ -65,7 +65,7 @@ jobs:
           fi
 
       - name: Build (Release)
-        run: dotnet build CS2OpenDev.ConfigManager.slnx -c Release
+        run: dotnet build CS2OpenDev-ConfigManager.slnx -c Release
 
       - name: Core tests
         run: dotnet run --project test/CS2OpenDev.ConfigManager.Core.Tests -c Release --no-build
