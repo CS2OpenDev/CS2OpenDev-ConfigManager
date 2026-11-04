@@ -2,9 +2,9 @@
 
 Status: design, 2026-11-01. The product is Advanced Config Backup: a standalone tool first, with a first-party
 DemoViewer.NET plugin from this repository. It started inside DemoViewer.NET as an extension and moved here
-before it was merged. This design replaces the script restorer described in [v1-reference.md](v1-reference.md). What
-v1 captures and why (the section table, what is left behind on purpose, secret removal, hardware-key merges)
-carries over unless this document says otherwise; how a backup is packaged, trusted and restored does not.
+before it was merged. This design replaces v1's script restorer. What v1 captured and
+why carried over, and [what-is-saved.md](what-is-saved.md) lists it as it is now (the sections, what is left out
+on purpose, secret removal, hardware-key merges); how a backup is packaged, trusted and restored did not.
 
 ## Why v1's restorer is replaced
 
