@@ -26,7 +26,7 @@ read. A file that does not match the archive's manifest is detected and the arch
 (`hash` level) archive proves only that, since anyone can edit it and rewrite its manifest. A backup sealed with
 a passphrase (`seal` level, `acb backup --seal`, or the plugin's "Seal the backup" box) opens only with that
 passphrase, which shows it was made by someone who knows it and is unchanged since. A backup restores
-only on the platform it was made on (Windows x64 or Linux x64). [docs/v1-reference.md](docs/v1-reference.md) has the full
+only on the platform it was made on (Windows x64 or Linux x64). [docs/what-is-saved.md](docs/what-is-saved.md) has the full
 list of what is saved, what is left out on purpose, and why.
 
 ## Using acb
