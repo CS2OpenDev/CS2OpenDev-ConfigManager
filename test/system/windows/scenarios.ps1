@@ -111,7 +111,9 @@ else {
 }
 
 # Probes, both users: what this kind of Windows offers the machine-wide sections.
-Info ("powercfg /list: " + ((& "$env:SystemRoot\System32\powercfg.exe" /list 2>&1 | Out-String).Trim()))
+# Probes only report: powercfg writes to stderr where it has no power service, which Stop would make fatal.
+try { Info ("powercfg /list: " + ((& "$env:SystemRoot\System32\powercfg.exe" /list 2>&1 | Out-String).Trim())) }
+catch { Info "powercfg /list failed: $($_.Exception.Message)" }
 Info "nvapi64.dll present: $(Test-Path "$env:SystemRoot\System32\nvapi64.dll")"
 Info "EnableLUA: $((Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -ErrorAction SilentlyContinue).EnableLUA)"
 Write-Host "all $script:pass asserted scenarios passed"
