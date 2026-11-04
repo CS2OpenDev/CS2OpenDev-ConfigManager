@@ -3,7 +3,7 @@
 > v1, written while this lived in DemoViewer.NET as an extension, so paths and type names here use that
 > layout (`src/Extensions/AdvancedConfigBackup/...`, `DemoViewer.NET.Extensions.ConfigBackup.*`); the code is
 > now under `src/CS2OpenDev.ConfigManager.Core` and `plugin/CS2OpenDev.ConfigManager.DemoViewer`. The restorer
-> described here (`Restore.ps1` and the kit it compiled) was replaced by `acb` in phase 2 and deleted; see
+> described here (`Restore.ps1` and the kit it compiled) was replaced by `acb` and deleted; see
 > [design.md](design.md). What is captured, and why, carries over.
 
 A first-party extension (`net.demoviewer.pack.configbackup`) that saves a player's CS2 settings, and

@@ -309,7 +309,7 @@ it. That helps an honest player; it enforces nothing, as the maker controls thei
 does not know, a misspelt section, a malformed id, comments or trailing commas refuse the file, so a policy is
 never half-applied. `steamIds` is checked against a signature, never the manifest's own account: the reader
 hands over the signer it verified, and a backup below `identity`, with no verified signer, or signed by an account
-the list does not name is refused. Until `identity` (phase 7) a policy that names Steam IDs refuses every backup.
+the list does not name is refused. Until `identity` is turned on, a policy that names Steam IDs refuses every backup.
 A policy or plan file saved with a byte order mark, or as UTF-16 (Windows PowerShell 5.1's `>`), is read by its
 mark; a policy's digest is over the file's own bytes.
 
@@ -645,9 +645,7 @@ built yet.
   workflow itself. Run by hand it is a dry run that keeps the binaries as workflow artifacts and attests nothing. The
   tag must name the version `version.json` gives the commit.
 - Attestations are stored by GitHub for public repositories on every plan; a private repository needs Enterprise
-  Cloud. The repository is public before its first tag. The same setup was checked against DemoViewer.NET v0.10.1
-  (2026-11-03): its assets verify pinned to its `release.yml` and tag, fail when another workflow is named, a
-  changed file has no attestation, and a downloaded bundle verifies with `--bundle`.
+  Cloud, so the repository is public.
 - `acb.exe` is not Authenticode-signed yet. Windows code signing comes from the stack-wide work (DemoViewer.NET's
   `docs/code-signing/plan.md`), which is waiting on a publisher identity; when it lands, `release.yml` signs
   `acb.exe` before checksumming it. Linux has no OS signing to target, so there the attestation and `SHA256SUMS`
@@ -701,18 +699,13 @@ none of them is riskier than asking, as every one still ends at a step that says
 The DemoViewer.NET plugin does not make self-contained backups: it would have to ship `acb` binaries for both
 platforms, and it cannot load until DemoViewer.NET can load it (see "Loading the plugin in DemoViewer.NET").
 
-## Plan
+## Where it stands
 
-| Phase | Work | Status |
-|---|---|---|
-| 0 | Spike: Terminal.Gui 2.5 and an Argon2id library under Native AOT on `win-x64` and `linux-x64` | done |
-| 1 | Core: move the kit into a library; one rule set; archive v2 writer and strict reader; `hash` level | done |
-| 2 | `acb` headless: `verify`, `show`, `plan`, `restore`, `undo`, `backup`; undo store; failure policy; Windows elevation; policy files. The extension switches to v2; delete `Restore.ps1` and the `.cmd` files | done |
-| 3 | Screens (TUI) | done |
-| 4 | Linux sections and Steam roots; the machine seam | done |
-| 5 | `seal` | done |
-| 6 | Self-contained archives, packaging, signing integration | done (Windows Authenticode waits on the publisher identity) |
-| 7 | `identity` | client done (checking, signing in, signing, key ceremony), tested against a stand-in; waits on the service, the root keys, and a security review |
+- Built: the `hash` and `seal` levels, every command, the screens, Windows and Linux sections, self-contained
+  backups and the release workflow. The DemoViewer.NET plugin writes v2 archives; the v1 PowerShell restorer is gone.
+- `identity`: checking and signing are built and tested against a stand-in service. It is off until the CS2OpenDev
+  service exists and the root keys are made, and it gets a security review before it is turned on.
+- Windows code signing waits on the publisher identity.
 
 ### Libraries
 
