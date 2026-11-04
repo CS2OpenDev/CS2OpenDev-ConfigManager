@@ -15,8 +15,9 @@ SHELL ["powershell", "-NoProfile", "-Command", "$ErrorActionPreference = 'Stop';
 COPY ["acb.exe", "C:/Program Files/acb/acb.exe"]
 COPY New-FakeSteam.ps1 scenarios.ps1 C:/acb-fixture/
 
-# A standard (non-administrator) local account. The password exists only in this throwaway image.
-RUN net user player 'Acb-Fixture-1!' /add /passwordchg:no /expires:never | Out-Null; `
+# A standard (non-administrator) local account, with no password: docker run --user cannot log on an account that
+# has one (0x52e, the user name or password is incorrect).
+RUN net user player /add /expires:never | Out-Null; `
     New-Item -ItemType Directory C:\Steam | Out-Null; `
     icacls C:\Steam /grant 'player:(OI)(CI)M' | Out-Null
 
