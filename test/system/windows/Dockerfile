@@ -12,7 +12,7 @@ FROM ${BASE}
 SHELL ["powershell", "-NoProfile", "-Command", "$ErrorActionPreference = 'Stop';"]
 
 # Elevation is offered only for an acb in a folder only administrators can change: Program Files is one.
-COPY acb.exe "C:/Program Files/acb/acb.exe"
+COPY ["acb.exe", "C:/Program Files/acb/acb.exe"]
 COPY New-FakeSteam.ps1 scenarios.ps1 C:/acb-fixture/
 
 # A standard (non-administrator) local account. The password exists only in this throwaway image.
