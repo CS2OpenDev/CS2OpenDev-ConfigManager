@@ -13,6 +13,8 @@
 # Run by hand (workflow_dispatch) it is a dry run: everything but the release, with the binaries kept as workflow
 # artifacts.
 #
+# The release notes start with .github/release-notes.md (the SmartScreen warning and how to check a download).
+#
 # acb.exe is not Authenticode-signed yet. Windows code signing comes with the CS2OpenDev signing identity (see
 # docs/design.md, "Distribution and code signing"); until then the attestation is what ties a binary to this
 # workflow. The publish job runs in the release-signing environment, so a tag waits for a maintainer's approval.
@@ -163,5 +165,8 @@ jobs:
           set -euo pipefail
           prerelease=""
           case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          # .github/release-notes.md as of the tag, with {tag} filled in, goes above GitHub's generated notes.
+          gh api "repos/$GITHUB_REPOSITORY/contents/.github/release-notes.md?ref=$GITHUB_REF_NAME" \
+            -H "Accept: application/vnd.github.raw" | sed "s/{tag}/$GITHUB_REF_NAME/g" > notes.md
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "acb ${GITHUB_REF_NAME#v}" \
-            --generate-notes $prerelease dist/acb-win-x64.exe dist/acb-linux-x64 dist/SHA256SUMS
+            --notes-file notes.md --generate-notes $prerelease dist/acb-win-x64.exe dist/acb-linux-x64 dist/SHA256SUMS
