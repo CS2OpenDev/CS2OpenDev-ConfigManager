@@ -94,6 +94,7 @@ else {
     if (-not (Get-Item $autoexec).IsReadOnly) { throw 'read-only attribute lost' }
     & $acb undo --yes | Out-Null
     Ok 'read-only attribute: written and kept'
+    Set-ItemProperty $autoexec IsReadOnly $false
 
     # 5. HKCU sections, real registry API on the container's own hive. The session-user check may defer them here
     #    (a container has no interactive session); the output says which.
