@@ -640,8 +640,14 @@ built yet.
 - `release.yml` publishes `acb` on a `v*` tag, after a maintainer approves the `release-signing` environment:
   `acb-win-x64.exe` and `acb-linux-x64`, each built Native AOT, tested and smoke-tested alone in an empty folder,
   with `SHA256SUMS` and a GitHub build provenance attestation for every file (`gh attestation verify <file>
-  --repo <owner>/CS2OpenDev-ConfigManager`). Run by hand it is a dry run that keeps the binaries as workflow
-  artifacts. The tag must name the version `version.json` gives the commit.
+  --repo CS2OpenDev/CS2OpenDev-ConfigManager --signer-workflow CS2OpenDev/CS2OpenDev-ConfigManager/.github/workflows/release.yml
+  --source-ref refs/tags/<tag>`). The release is created only after that check passes on every file in the
+  workflow itself. Run by hand it is a dry run that keeps the binaries as workflow artifacts and attests nothing. The
+  tag must name the version `version.json` gives the commit.
+- Attestations are stored by GitHub for public repositories on every plan; a private repository needs Enterprise
+  Cloud. The repository is public before its first tag. The same setup was checked against DemoViewer.NET v0.10.1
+  (2026-11-03): its assets verify pinned to its `release.yml` and tag, fail when another workflow is named, a
+  changed file has no attestation, and a downloaded bundle verifies with `--bundle`.
 - `acb.exe` is not Authenticode-signed yet. Windows code signing comes from the stack-wide work (DemoViewer.NET's
   `docs/code-signing/plan.md`), which is waiting on a publisher identity; when it lands, `release.yml` signs
   `acb.exe` before checksumming it. Linux has no OS signing to target, so there the attestation and `SHA256SUMS`
@@ -656,10 +662,12 @@ a published `acb` is carried (named `acb` or as a release names it); a test host
 may be up to 64 MB, against 16 MB for a settings file, and the reader refuses any other name under `restorer/`,
 including the other platform's.
 
-Running the restorer is trusted through its code signature (the publisher Windows shows), not through anything the
-backup says about itself. A separately installed `acb` checking such a backup (`verify`, `show`, `plan`, `restore`,
-the screens) prints the restorer's SHA-256 and says whether it is byte for byte that `acb`; otherwise the person
-checks it against the `SHA256SUMS` of the release it should be. No offline list of released builds is kept: a
+Running the restorer is trusted through where it was built, not through anything the backup says about itself.
+Until `acb.exe` is code-signed that is its build provenance attestation: an attestation is looked up by SHA-256, so
+`gh attestation verify restorer/acb.exe` on the unpacked restorer passes only for a released `acb`. A separately
+installed `acb` checking such a backup (`verify`, `show`, `plan`, `restore`, the screens) prints the restorer's
+SHA-256 and says whether it is byte for byte that `acb`; otherwise the person checks it against the `SHA256SUMS`
+of the release it should be, or with the attestation. No offline list of released builds is kept: a
 build cannot know the releases after it.
 
 `acb` still never reads an unpacked backup. A restorer has to be unpacked to run, so it looks for the zip it came

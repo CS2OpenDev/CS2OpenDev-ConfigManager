@@ -95,12 +95,22 @@ from a temp folder, and `acb` looks for the zip by name in Documents, Desktop, D
 ## Downloads
 
 Each release carries `acb-win-x64.exe`, `acb-linux-x64` and `SHA256SUMS`, and every file has a build provenance
-attestation from the release workflow. To check a download:
+attestation from the release workflow. To check a download, with the [GitHub CLI](https://cli.github.com/):
 
 ```
+gh attestation verify acb-win-x64.exe --repo CS2OpenDev/CS2OpenDev-ConfigManager \
+  --signer-workflow CS2OpenDev/CS2OpenDev-ConfigManager/.github/workflows/release.yml --source-ref refs/tags/v0.1.0
 sha256sum -c --ignore-missing SHA256SUMS
-gh attestation verify acb-win-x64.exe --repo <owner>/CS2OpenDev-ConfigManager
 ```
+
+That says the file was built by this repository's release workflow from the `v0.1.0` tag and has not changed
+since. A file with one byte changed has no attestation, and so does a build from any other workflow. The release
+workflow runs the same check before it publishes anything.
+
+An attestation is found by the file's SHA-256, not its name, so the restorer inside a self-contained backup checks
+the same way once unpacked: `gh attestation verify restorer/acb.exe --repo ...` passes when it is a released
+`acb`, whatever the backup says about it. To check without a network later, save the attestation first with
+`gh attestation download <file> --repo CS2OpenDev/CS2OpenDev-ConfigManager` and add `--bundle <saved .jsonl>`.
 
 `acb-win-x64.exe` is not code-signed yet, so Windows warns about an unknown publisher until it is.
 

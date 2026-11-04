@@ -2,8 +2,13 @@
 # smoke-test each binary alone in an empty folder (as a self-contained backup carries it), then publish both to a
 # GitHub Release with SHA256SUMS and a build provenance attestation per file:
 #
-#   gh attestation verify acb-win-x64.exe --repo <owner>/CS2OpenDev-ConfigManager
+#   gh attestation verify acb-win-x64.exe --repo CS2OpenDev/CS2OpenDev-ConfigManager \
+#     --signer-workflow CS2OpenDev/CS2OpenDev-ConfigManager/.github/workflows/release.yml --source-ref refs/tags/vX.Y.Z
 #   sha256sum -c --ignore-missing SHA256SUMS
+#
+# The release is created only after those same checks pass here, so a release whose files do not verify is never
+# published. GitHub stores attestations for public repositories on every plan; a private one needs Enterprise Cloud,
+# so this repository has to be public before the first tag.
 #
 # Run by hand (workflow_dispatch) it is a dry run: everything but the release, with the binaries kept as workflow
 # artifacts.
@@ -137,6 +142,19 @@ jobs:
             dist/acb-win-x64.exe
             dist/acb-linux-x64
             dist/SHA256SUMS
+
+      # What a person checking a download runs, pinned to this workflow and this tag: a release is created only when
+      # every file it carries verifies that way.
+      - name: Check the attestations verify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for file in dist/acb-win-x64.exe dist/acb-linux-x64 dist/SHA256SUMS; do
+            gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$GITHUB_REF_NAME" --deny-self-hosted-runners
+          done
 
       - name: Publish the release
         env:
